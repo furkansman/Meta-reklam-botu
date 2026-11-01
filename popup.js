@@ -4,6 +4,9 @@ const $ = (selector) => document.querySelector(selector);
 const tabs = [...document.querySelectorAll('[role="tab"]')];
 const feedback = (message) => { $('#feedback').textContent = message; };
 let running = false;
+let ready = false;
+let busy = false;
+let refreshVersion = 0;
 let state = { ads: [], scrollCount: 0, settings: { autoScroll: true, speed: 'medium', maxAds: 100 }, history: [], competitors: [], filters: { mediaType: 'all', platform: 'all' } };
 
 function activateTab(tab) {
@@ -58,38 +61,60 @@ function render() {
     remove.textContent = 'Kaldır';
     remove.setAttribute('aria-label', `${name} markasını kaldır`);
     remove.addEventListener('click', () => perform(remove, async () => {
-      const competitors = state.competitors.filter((item) => item !== name);
-      await chrome.storage.local.set({ competitors });
-      state.competitors = competitors;
-      render();
+      await command('REMOVE_COMPETITOR', { name });
+      await refreshState();
       feedback('Marka listeden kaldırıldı.');
     }));
-    li.append(label, remove);
+    const link = document.createElement('a');
+    link.textContent = 'Reklamları aç';
+    link.href = `https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=ALL&q=${encodeURIComponent(name)}`;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    li.append(label, link, remove);
     $('#competitor-list').append(li);
   });
   $('#competitors-empty').hidden = state.competitors.length > 0;
 }
 
+async function command(type, payload = {}) {
+  let response;
+  try { response = await chrome.runtime.sendMessage({ type, ...payload }); }
+  catch { throw new Error('Eklenti bağlantısı kurulamadı. Eklentiyi yeniden yükle.'); }
+  if (!response?.ok) throw new Error(response?.error || 'İşlem tamamlanamadı.');
+  return response;
+}
 async function perform(button, operation) {
+  if (!ready || busy) return;
+  busy = true;
   button.disabled = true;
+  renderScan();
   try { await operation(); }
-  catch (error) { feedback(error.message || 'İşlem tamamlanamadı. Lütfen tekrar dene.'); }
-  finally { button.disabled = false; }
+  catch (error) { feedback(error.message || 'İşlem tamamlanamadı.'); }
+  finally { busy = false; if (button.isConnected) button.disabled = false; renderScan(); }
+}
+
+function filteredAds() {
+  return state.ads.filter((ad) => {
+    const media = state.filters.mediaType;
+    const mediaMatch = media === 'all' || (media === 'video' ? ad.videos?.length > 0 : ad.images?.length > 0 && !ad.videos?.length);
+    return mediaMatch && (state.filters.platform === 'all' || ad.platforms?.includes(state.filters.platform));
+  });
 }
 
 function renderScan() {
-  $('#scan-status').textContent = running ? 'Çalışıyor…' : 'Hazır';
+  $('#scan-status').textContent = !ready ? 'Yükleniyor…' : state.scan?.stopping ? 'Durduruluyor…' : running ? 'Çalışıyor…' : 'Hazır';
   $('#scan-status').classList.toggle('running', running);
+  $('#export-summary').textContent = `${filteredAds().length} / ${state.ads.length} reklam dışa aktarılacak`;
   $('#ad-count').textContent = state.ads.length;
   $('#scroll-count').textContent = state.scrollCount;
-  $('#start-scan').disabled = running;
-  $('#stop-scan').disabled = !running;
-  $('#auto-scroll').disabled = running;
-  $('#scroll-speed').disabled = running || !$('#auto-scroll').checked;
-  $('#max-ads').disabled = running;
-  $('#clear-results').disabled = running;
-  $('#export-csv').disabled = running || state.ads.length === 0;
-  $('#export-json').disabled = running || state.ads.length === 0;
+  $('#start-scan').disabled = !ready || busy || running;
+  $('#stop-scan').disabled = !ready || busy || !running || Boolean(state.scan?.stopping);
+  $('#auto-scroll').disabled = !ready || busy || running;
+  $('#scroll-speed').disabled = !ready || busy || running || !$('#auto-scroll').checked;
+  $('#max-ads').disabled = !ready || busy || running;
+  $('#clear-results').disabled = !ready || busy || running;
+  $('#export-csv').disabled = !ready || busy || running || filteredAds().length === 0;
+  $('#export-json').disabled = !ready || busy || running || filteredAds().length === 0;
 }
 
 $('#auto-scroll').addEventListener('change', renderScan);
@@ -101,35 +126,21 @@ $('#scan-form').addEventListener('submit', (event) => {
   }
   perform(event.submitter, async () => {
     const settings = { autoScroll: $('#auto-scroll').checked, speed: $('#scroll-speed').value, maxAds };
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id || !/^https:\/\/www\.facebook\.com\/ads\/library\/?(?:[?#]|$)/.test(tab.url || '')) {
-      throw new Error('Önce Meta Reklam Kütüphanesi sekmesini aç.');
-    }
-    let response;
-    try { response = await chrome.tabs.sendMessage(tab.id, { type: 'META_SCAN_START', tabId: tab.id, settings }); }
-    catch { throw new Error('Sayfayı yenileyip tekrar dene. Eklenti bu sayfaya henüz bağlanamadı.'); }
-    if (!response?.ok) throw new Error(response?.error || 'Tarama başlatılamadı.');
-    await chrome.storage.local.set({ settings });
+    await command('START_SCAN', { settings });
     state.settings = settings;
-    await refreshScan();
-    feedback('Tarama başlatıldı. Paneli kapatsan da açık sayfada devam eder.');
+    await refreshState();
+    feedback('Tarama başlatıldı. Açık Meta sayfasında devam eder.');
   }).then(renderScan);
 });
 
 $('#stop-scan').addEventListener('click', (event) => perform(event.currentTarget, async () => {
-  const { scan } = await chrome.storage.local.get('scan');
-  if (scan?.tabId) {
-    try { await chrome.tabs.sendMessage(scan.tabId, { type: 'META_SCAN_STOP' }); }
-    catch { await chrome.storage.local.set({ scan: { ...scan, running: false, reason: 'tab-closed' } }); }
-  }
-  feedback('Durdurma isteği gönderildi.');
+  await command('STOP_SCAN');
+  await refreshState();
 }).then(renderScan));
 
 $('#clear-results').addEventListener('click', (event) => perform(event.currentTarget, async () => {
-  await chrome.storage.local.set({ ads: [], scrollCount: 0 });
-  state.ads = [];
-  state.scrollCount = 0;
-  render();
+  await command('CLEAR_RESULTS');
+  await refreshState();
   feedback('Tarama sonuçları temizlendi.');
 }).then(renderScan));
 
@@ -141,12 +152,14 @@ function csvCell(value) {
 }
 
 function exportAds(format) {
-  if (running || !state.ads.length) return;
-  let content = JSON.stringify(state.ads, null, 2);
+  if (!ready || busy || running) return;
+  const ads = filteredAds();
+  if (!ads.length) { feedback('Seçili filtrelere uygun sonuç yok.'); return; }
+  let content = JSON.stringify(ads, null, 2);
   if (format === 'csv') {
-    const columns = [...new Set(state.ads.flatMap((ad) => Object.keys(ad)))];
+    const columns = [...new Set(ads.flatMap((ad) => Object.keys(ad)))];
     content = '\uFEFF' + [columns.map(csvCell).join(','),
-      ...state.ads.map((ad) => columns.map((key) => csvCell(ad[key])).join(','))].join('\r\n');
+      ...ads.map((ad) => columns.map((key) => csvCell(ad[key])).join(','))].join('\r\n');
   }
   const blob = new Blob([content], { type: format === 'csv' ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8' });
   const url = URL.createObjectURL(blob);
@@ -163,9 +176,8 @@ $('#export-csv').addEventListener('click', () => exportAds('csv'));
 $('#export-json').addEventListener('click', () => exportAds('json'));
 
 $('#clear-history').addEventListener('click', (event) => perform(event.currentTarget, async () => {
-  await chrome.storage.local.set({ history: [] });
-  state.history = [];
-  render();
+  await command('CLEAR_HISTORY');
+  await refreshState();
   feedback('Arama geçmişi temizlendi.');
 }));
 
@@ -177,9 +189,8 @@ $('#competitor-form').addEventListener('submit', (event) => {
     feedback('Bu marka zaten listende.'); return;
   }
   perform(event.submitter, async () => {
-    const competitors = [...state.competitors, name];
-    await chrome.storage.local.set({ competitors });
-    state.competitors = competitors;
+    await command('ADD_COMPETITOR', { name });
+    await refreshState();
     $('#competitor-name').value = '';
     render();
     feedback('Marka takip listesine eklendi.');
@@ -190,51 +201,48 @@ $('#filters-form').addEventListener('submit', (event) => {
   event.preventDefault();
   perform(event.submitter, async () => {
     const filters = { mediaType: $('#media-type').value, platform: $('#platform').value };
-    await chrome.storage.local.set({ filters });
-    state.filters = filters;
+    await command('SAVE_FILTERS', { filters });
+    await refreshState();
     feedback('Filtre tercihlerin kaydedildi.');
   });
 });
 
+const REASONS = {
+  limit: 'Maksimum reklam sayısına ulaşıldı.', 'visible-complete': 'Görünür reklamlar toplandı.',
+  'no-new-ads': 'Yeni reklam bulunamadı. Sayfa yüklemesini ve dilini kontrol et.',
+  'page-changed': 'Sayfa değiştiği için tarama durdu.', error: 'Tarama sırasında hata oluştu.',
+  'storage-error': 'Sonuçlar kaydedilemedi. Depolama alanını kontrol et.', stopped: 'Tarama durduruldu.',
+  disconnected: 'Tarama sekmesi kapandı, yenilendi veya bağlantısı kesildi.', 'start-error': 'Tarama başlatılamadı. Meta sekmesini yenile.'
+};
+async function refreshState(reconcile = false) {
+  const version = ++refreshVersion;
+  const saved = reconcile ? (await command('GET_STATE')).state : await chrome.storage.local.get(Object.keys(state).concat('scan'));
+  if (version !== refreshVersion) return;
+  const oldScan = state.scan;
+  state = { ...state, ...saved };
+  running = Boolean(state.scan?.running);
+  render();
+  if (!running && state.scan?.reason && (oldScan?.running || oldScan?.reason !== state.scan.reason)) feedback(REASONS[state.scan.reason] || '');
+}
 async function init() {
   const buttons = [...document.querySelectorAll('button:not([role="tab"])')];
   buttons.forEach((button) => { button.disabled = true; });
+  renderScan();
   try {
-    const saved = await chrome.storage.local.get(['ads', 'scrollCount', 'settings', 'history', 'competitors', 'filters', 'scan']);
-    state = { ...state, ...saved };
-    await refreshScan(true);
+    await refreshState(true);
     $('#media-type').value = state.filters.mediaType;
     $('#platform').value = state.filters.platform;
     $('#auto-scroll').checked = state.settings.autoScroll;
     $('#scroll-speed').value = state.settings.speed;
     $('#max-ads').value = state.settings.maxAds;
-    render();
+    ready = true;
     buttons.forEach((button) => { button.disabled = false; });
     renderScan();
-  } catch { feedback('Yerel veriler yüklenemedi. Eklentiyi yeniden açmayı dene.'); }
-}
-async function refreshScan(checkConnection = false) {
-  const saved = await chrome.storage.local.get(['ads', 'scrollCount', 'scan', 'history']);
-  state = { ...state, ...saved };
-  running = Boolean(saved.scan?.running);
-  if (running && checkConnection) {
-    try {
-      const status = await chrome.tabs.sendMessage(saved.scan.tabId, { type: 'META_SCAN_STATUS' });
-      running = Boolean(status?.running);
-    } catch { running = false; }
-    if (!running) await chrome.storage.local.set({ scan: { ...saved.scan, running: false, reason: 'tab-closed' } });
-  }
-  render();
-  if (!running && saved.scan?.reason) {
-    const reasons = { limit: 'Maksimum reklam sayısına ulaşıldı.', 'visible-complete': 'Görünür reklamlar toplandı.',
-      'no-new-ads': 'Yeni reklam bulunamadı. Yüklemeyi ve sayfa dilini kontrol et.', 'page-changed': 'Sayfa değiştiği için tarama durdu.',
-      error: 'Tarama sırasında hata oluştu.', 'storage-error': 'Depolama doldu; tarama durdu.', stopped: 'Tarama durduruldu.', 'tab-closed': 'Tarama sekmesi kapandı veya yenilendi.' };
-    feedback(reasons[saved.scan.reason] || '');
-  }
+  } catch (error) { feedback(error.message); }
 }
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && ['ads', 'scrollCount', 'scan', 'history'].some((key) => key in changes)) {
-    refreshScan().catch(() => feedback('Tarama durumu okunamadı.'));
+  if (area === 'local' && ['ads', 'scrollCount', 'scan', 'history', 'competitors', 'filters'].some((key) => key in changes)) {
+    refreshState().catch(() => feedback('Tarama durumu okunamadı.'));
   }
 });
 init();

@@ -36,7 +36,7 @@
         <input id="max-ads" type="number" min="1" max="10000" step="1" value="100" required>
         <p class="hint">Meta Reklam Kütüphanesi sekmesini açıp taramayı başlat.</p>
       </form>
-      <div class="export-heading"><h3>Dışa Aktar</h3><span>Toplanan reklam verileri</span></div>
+      <div class="export-heading"><h3>Dışa Aktar</h3><span id="export-summary">Toplanan reklam verileri</span></div>
       <div class="export-actions"><button id="export-csv" class="secondary" type="button" disabled>CSV</button><button id="export-json" class="secondary" type="button" disabled>JSON</button><button id="clear-results" class="secondary danger" type="button">Temizle</button></div>
     </section>
     <section id="history" role="tabpanel" aria-labelledby="tab-history" hidden>
@@ -56,11 +56,11 @@
         <label for="media-type">Medya türü</label><select id="media-type"><option value="all">Tüm medya türleri</option><option value="image">Görsel</option><option value="video">Video</option></select>
         <label for="platform">Platform</label><select id="platform"><option value="all">Tüm platformlar</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option></select>
         <button class="primary" type="submit">Tercihleri kaydet <span aria-hidden="true">✓</span></button>
-        <p class="hint">Tercihler saklanır. Sonuçları süzmek için Meta sayfasının filtrelerini kullan.</p>
+        <p class="hint">Filtreler dışa aktarılan sonuçlara uygulanır. Platformu belirlenemeyen reklamlar yalnızca “Tüm platformlar” seçeneğinde yer alır.</p>
       </form>
     </section>
     <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
   </main>
-  <footer><span class="status-dot"></span> Yerel çalışma alanı <span>v0.1.0</span></footer>
+  <footer><span class="status-dot"></span> Yerel çalışma alanı <span>v0.2.0</span></footer>
 </body>
 </html>

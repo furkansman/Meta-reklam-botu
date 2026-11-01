@@ -68,13 +68,18 @@
       destinationUrls: links.filter((href) => { const host = new URL(href).hostname; return host !== 'facebook.com' && !host.endsWith('.facebook.com'); }),
       images: [...new Set([...card.querySelectorAll('img')].map((img) => safeUrl(img.currentSrc || img.src)).filter(Boolean))],
       videos: [...new Set([...card.querySelectorAll('video')].map((video) => safeUrl(video.currentSrc || video.src)).filter(Boolean))],
+      platforms: [...new Set([...card.querySelectorAll('[aria-label], [title]')].flatMap((element) => {
+        const label = element.getAttribute('aria-label') || element.getAttribute('title') || '';
+        return /^(facebook|instagram)$/i.test(label) ? [label.toLowerCase()] : [];
+      }))],
       sourceUrl: location.href, collectedAt: new Date().toISOString()
     };
   }
 
-  function snapshot(current, running, reason) {
-    return { ads: [...current.ads.values()], scrollCount: current.scrollCount,
-      scan: { running, tabId: current.tabId, startedAt: current.startedAt, updatedAt: Date.now(), reason } };
+  async function report(current, finished, reason) {
+    const response = await chrome.runtime.sendMessage({ type: finished ? 'META_SCAN_FINISHED' : 'META_SCAN_PROGRESS',
+      sessionId: current.sessionId, ads: [...current.ads.values()], scrollCount: current.scrollCount, reason });
+    if (!response?.ok) throw new Error(response?.error || 'Tarama durumu kaydedilemedi.');
   }
 
   async function run(current) {
@@ -89,7 +94,7 @@
           current.ads.set(id, extract(id, card));
         }
         idle = current.ads.size === before ? idle + 1 : 0;
-        await chrome.storage.local.set(snapshot(current, true, 'running'));
+        await report(current, false, 'running');
         if (current.ads.size >= current.settings.maxAds) { reason = 'limit'; break; }
         if (!current.settings.autoScroll) { reason = 'visible-complete'; break; }
         if (idle >= 8) { reason = 'no-new-ads'; break; }
@@ -105,24 +110,17 @@
       console.warn('Meta Reklam Botu: tarama kaydedilemedi.', error);
       reason = 'error';
     } finally {
-      try {
-        const { history = [] } = await chrome.storage.local.get('history');
-        await chrome.storage.local.set({ ...snapshot(current, false, reason), history: [
-          { createdAt: current.startedAt, adCount: current.ads.size, scrollCount: current.scrollCount, reason, settings: current.settings },
-          ...history
-        ].slice(0, 100) });
-      } catch {
-        // Even if results exceed the storage quota, release the running state.
-        await chrome.storage.local.set({ scan: { running: false, tabId: current.tabId, reason: 'storage-error' } }).catch(() => {});
-      }
+      try { await report(current, true, reason); }
+      catch (error) { console.warn('Meta Reklam Botu: oturum kapatıldı.', error); }
       if (session === current) session = null;
     }
   }
 
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (sender.id !== chrome.runtime.id) return;
-    if (message?.type === 'META_SCAN_STATUS') { respond({ running: Boolean(session), tabId: session?.tabId }); return; }
+    if (message?.type === 'META_SCAN_STATUS') { respond({ running: Boolean(session), sessionId: session?.sessionId }); return; }
     if (message?.type === 'META_SCAN_STOP') {
+      if (session && message.sessionId !== session.sessionId) { respond({ ok: false }); return; }
       if (session) session.stopped = true;
       wake?.();
       respond({ ok: true });
@@ -132,15 +130,13 @@
     (async () => {
       if (!onLibrary()) throw new Error('Meta Reklam Kütüphanesi sayfasını aç.');
       if (session) throw new Error('Bu sekmede zaten bir tarama çalışıyor.');
-      const { settings, tabId } = message;
+      const { settings, tabId, sessionId } = message;
       if (!settings || !Number.isInteger(settings.maxAds) || settings.maxAds < 1 || settings.maxAds > 10000 ||
-          !Object.hasOwn(DELAYS, settings.speed) || typeof settings.autoScroll !== 'boolean' || !Number.isInteger(tabId)) {
+          !Object.hasOwn(DELAYS, settings.speed) || typeof settings.autoScroll !== 'boolean' || !Number.isInteger(tabId) || typeof sessionId !== 'string') {
         throw new Error('Tarama ayarları geçersiz.');
       }
-      const current = { settings, tabId, ads: new Map(), scrollCount: 0, startedAt: Date.now(), url: location.href, stopped: false };
+      const current = { settings, tabId, sessionId, ads: new Map(), scrollCount: 0, startedAt: Date.now(), url: location.href, stopped: false };
       session = current;
-      try { await chrome.storage.local.set(snapshot(current, true, 'running')); }
-      catch (error) { session = null; throw error; }
       respond({ ok: true });
       void run(current);
     })().catch((error) => respond({ ok: false, error: error.message }));
