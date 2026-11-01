@@ -5,6 +5,7 @@ const tabs = [...document.querySelectorAll('[role="tab"]')];
 const feedback = (message) => { $('#feedback').textContent = message; };
 let running = false;
 let ready = false;
+let liveProgress = null;
 let busy = false;
 let refreshQueue = Promise.resolve();
 let state = { telegramStatus: { enabled: false, tokenConfigured: false, chatId: '' }, ads: [], scrollCount: 0, settings: { autoScroll: true, speed: 'medium', maxAds: 100 }, history: [], competitors: [], competitorStats: {}, filters: { mediaType: 'all', platform: 'all' } };
@@ -130,9 +131,39 @@ function filteredAds() {
   });
 }
 
+function animateCount(node, value) {
+  const formatted = value.toLocaleString('tr-TR');
+  if (node.textContent === formatted) return;
+  node.textContent = formatted;
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    node.getAnimations().forEach((animation) => animation.cancel());
+    node.animate([{transform:'scale(1)'},{transform:'scale(1.1)'},{transform:'scale(1)'}],{duration:180,easing:'ease-out'});
+  }
+}
+function renderLiveBar() {
+  const fallback = { ads:state.ads.length, scrolls:state.scrollCount,
+    status:state.scan?.running ? 'scanning' : ['limit','visible-complete','no-new-ads'].includes(state.scan?.reason) ? 'completed' : state.scan?.reason ? 'stopped' : 'ready' };
+  const useLive = liveProgress && (liveProgress.sessionId === (state.scan?.sessionId || null));
+  const progress = useLive ? liveProgress : fallback;
+  animateCount($('#ad-count'),progress.ads);
+  animateCount($('#scroll-count'),progress.scrolls);
+  const labels = { ready:'Hazır', scanning:'Taranıyor…', stopped:'Durduruldu', completed:`Tamamlandı (${progress.ads.toLocaleString('tr-TR')} reklam)` };
+  $('#scan-status').textContent = !ready ? 'Yükleniyor…' : labels[progress.status];
+  $('#collected-summary').textContent = `${progress.ads.toLocaleString('tr-TR')} reklam toplandı`;
+  $('#scan-dot').classList.toggle('scanning',ready && progress.status === 'scanning');
+}
+function applyProgress(progress) {
+  if (!progress || !Number.isInteger(progress.ads) || progress.ads < 0 || !Number.isInteger(progress.scrolls) || progress.scrolls < 0 ||
+      !Number.isInteger(progress.revision) || !['ready','scanning','stopped','completed'].includes(progress.status)) return;
+  if (liveProgress && progress.revision < liveProgress.revision) return;
+  liveProgress = progress;
+  renderLiveBar();
+}
+chrome.runtime.onMessage.addListener((message,sender) => {
+  if (message?.type === 'SCAN_PROGRESS' && sender.id === chrome.runtime.id && !sender.tab) applyProgress(message);
+});
 function renderScan() {
-  $('#scan-status').textContent = !ready ? 'Yükleniyor…' : state.scan?.stopping ? 'Durduruluyor…' : running ? 'Çalışıyor…' : 'Hazır';
-  $('#scan-status').classList.toggle('running', running);
+  renderLiveBar();
   $('#start-label').textContent = running ? 'Çalışıyor…' : 'Taramayı Başlat';
   renderDateAnalysis();
   const exported = AdData.rows(state.ads);
@@ -141,8 +172,7 @@ function renderScan() {
   const discovery = state.scan?.discovery;
   $('#scan-diagnostics').textContent = discovery ? `Sayfa betiği v${discovery.version} · ${discovery.candidates} aday / ${discovery.matched} kart · Kütüphane Kodu: ${discovery.libraryCodeTexts || 0} · ${completeness}` : completeness;
   $('#export-summary').textContent = `${filteredAds().length} / ${state.ads.length} reklam dışa aktarılacak`;
-  $('#ad-count').textContent = state.ads.length;
-  $('#scroll-count').textContent = state.scrollCount;
+
   $('#start-scan').disabled = !ready || busy || running;
   $('#stop-scan').disabled = !ready || busy || !running || Boolean(state.scan?.stopping);
   $('#auto-scroll').disabled = !ready || busy || running;
@@ -286,7 +316,11 @@ async function init() {
   buttons.forEach((button) => { button.disabled = true; });
   renderScan();
   try {
+    const savedProgress = await chrome.storage.session.get('scanProgress');
+    applyProgress(savedProgress.scanProgress);
     await refreshState(true);
+    const currentProgress = await chrome.storage.session.get('scanProgress');
+    applyProgress(currentProgress.scanProgress);
     const { uiTheme } = await chrome.storage.local.get('uiTheme');
     applyTheme(uiTheme === 'dark' ? 'dark' : 'light');
     populateTelegram();
@@ -301,6 +335,7 @@ async function init() {
   } catch (error) { feedback(error.message); }
 }
 chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'session' && changes.scanProgress) applyProgress(changes.scanProgress.newValue);
   if (area === 'local' && ['ads', 'scrollCount', 'scan', 'history', 'competitors', 'competitorStats', 'filters', 'telegramStatus'].some((key) => key in changes)) {
     refreshState().catch(() => feedback('Tarama durumu okunamadı.'));
   }

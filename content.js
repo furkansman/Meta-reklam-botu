@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const VERSION = '0.6.0';
+  const VERSION = '0.7.0';
   if (globalThis.__metaAdCollector?.version === VERSION) return;
   // A previous boolean guard belongs to an older, non-disposable collector.
   if (globalThis.__metaAdCollector === true) return;
@@ -177,6 +177,12 @@
       libraryUrl: `https://www.facebook.com/ads/library/?id=${id}`, collectedAt: new Date().toISOString() };
   }
 
+  async function liveProgress(current, status = 'scanning') {
+    const response = await chrome.runtime.sendMessage({ type:'SCAN_PROGRESS', ads:current.ads.size,
+      scrolls:current.scrollCount, status, sessionId:current.sessionId });
+    if (!response?.ok) throw new Error(response?.error || 'Canlı sayaç güncellenemedi.');
+    await chrome.storage.session.set({ scanProgress:response.progress });
+  }
   async function report(current, finished, reason) {
     const response = await chrome.runtime.sendMessage({ type: finished ? 'META_SCAN_FINISHED' : 'META_SCAN_PROGRESS',
       sessionId: current.sessionId, ads: [...current.ads.values()], scrollCount: current.scrollCount, reason, discovery });
@@ -234,7 +240,9 @@
         empty = visibleCards.size ? 0 : empty + 1;
         for (const [id, card] of visibleCards) {
           if (current.ads.size >= current.settings.maxAds) break;
+          const isNew = !current.ads.has(id);
           current.ads.set(id, extract(id, card));
+          if (isNew) await liveProgress(current);
         }
         idle = current.ads.size === before ? idle + 1 : 0;
         await report(current, false, 'running');
@@ -249,13 +257,17 @@
         const target = scroller && scroller !== document.body ? scroller : window;
         target.scrollBy({ top: Math.max(500, (target === window ? window.innerHeight : target.clientHeight) * 0.85), behavior: 'instant' });
         current.scrollCount++;
+        await liveProgress(current);
         await waitForPage(current, DELAYS[current.settings.speed], !visibleCards.size);
       }
     } catch (error) {
       console.warn('Meta Reklam Botu: tarama kaydedilemedi.', error);
       reason = 'error';
     } finally {
-      try { await report(current, true, reason); }
+      try {
+        await liveProgress(current, ['limit','visible-complete','no-new-ads'].includes(reason) ? 'completed' : 'stopped');
+        await report(current, true, reason);
+      }
       catch (error) { console.warn('Meta Reklam Botu: oturum kapatıldı.', error); }
       if (session === current) session = null;
     }

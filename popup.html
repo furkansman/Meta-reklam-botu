@@ -26,6 +26,13 @@
     </header>
     <main>
       <section id="scan" role="tabpanel" aria-labelledby="tab-scan">
+        <section class="live-status-bar" aria-label="Canlı tarama durumu">
+          <div class="live-status-line" role="status" aria-live="polite"><span id="scan-dot" class="status-dot" aria-hidden="true"></span><span id="scan-status">Hazır</span><span id="collected-summary">0 reklam toplandı</span></div>
+          <div class="live-counters">
+            <div class="live-counter live-counter-ads"><strong id="ad-count">0</strong><span>REKLAM</span></div>
+            <div class="live-counter live-counter-scroll"><strong id="scroll-count">0</strong><span>SCROLL</span></div>
+          </div>
+        </section>
         <form id="scan-form" class="scan-controls card">
           <div class="scan-actions form-grid">
             <button id="start-scan" class="primary" type="submit"><svg class="button-icon" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true"><path d="m3 1 8 5-8 5Z"/></svg><span id="start-label">Taramayı Başlat</span></button>
@@ -57,7 +64,7 @@
             <div class="box metric metric-yellow"><strong id="new-day">0</strong><span>Test <small>(1 gün)</small></span></div>
           </div>
         </section>
-        <div class="counter-grid"><span>Reklam Sayısı <strong id="ad-count">0</strong></span><span>Scroll Sayısı <strong id="scroll-count">0</strong></span><span id="scan-status" class="scan-status" role="status">Hazır</span></div>
+
         <p id="scan-diagnostics" class="hint" aria-live="polite"></p>
         <p class="hint scan-hint">Meta Ad Library sonuçlarını aç, ardından taramayı başlat.</p>
       </section>
@@ -98,7 +105,7 @@
     </section>
       <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
     </main>
-    <footer><span class="footer-brand">Meta Reklam Botu</span><span class="footer-state"><i aria-hidden="true"></i> Yerel çalışma alanı</span><span>v0.6.0</span></footer>
+    <footer><span class="footer-brand">Meta Reklam Botu</span><span class="footer-state"><i aria-hidden="true"></i> Yerel çalışma alanı</span><span>v0.7.0</span></footer>
   </div>
 </body>
 </html>

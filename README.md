@@ -24,9 +24,17 @@ Rakip Takip listesine marka ekleyip Reklamları aç bağlantısıyla aramasını
 
 ## Güncel sürümü yükleme
 
-Bu paket **v0.6.0** olarak sürümlenmiştir. `chrome://extensions` üzerinden doğru depo klasöründen yüklenen eklentiyi yenileyin ve açık Meta sekmesini bir kez yeniden yükleyin. Panelin altında v0.6.0 görünmelidir; görünmüyorsa Chrome başka/eski bir klasörü çalıştırıyordur. Worker, eski sayfa betiğini sürüm kontrolüyle saptar ve önceki sonuçları silmeden yenileme ister. Tarama panelindeki aday/kart sayıları güncel betiğin gerçekten hangi kapsayıcıları işlediğini gösterir.
+Bu paket **v0.7.0** olarak sürümlenmiştir. `chrome://extensions` üzerinden doğru depo klasöründen yüklenen eklentiyi yenileyin ve açık Meta sekmesini bir kez yeniden yükleyin. Panelin altında v0.7.0 görünmelidir; görünmüyorsa Chrome başka/eski bir klasörü çalıştırıyordur. Worker, eski sayfa betiğini sürüm kontrolüyle saptar ve önceki sonuçları silmeden yenileme ister. Tarama panelindeki aday/kart sayıları güncel betiğin gerçekten hangi kapsayıcıları işlediğini gösterir.
 
 Kart keşfi artık hiçbir sınıf/border seçicisine dayanmaz. `(Kütüphane Kodu|Library ID)\s*:?\s*(\d{10,})` metninin en küçük eşleşen öğesinden yukarı çıkar; aynı ID ile reklam detayları kontrolünü ve Sponsorlu/Sponsored metninin üstündeki reklamveren adını kapsayan ilk öğeyi seçer. Farklı ID içeren üst sonuç listeleri kart olarak kabul edilmez. Aynı ID bir oturumda yalnızca bir kez saklanır. Türkçe/İngilizce başlangıç tarihleri ISO gün olarak çıkarılır; platform etiketleri ve görsel/video türü de kaydedilir. Eksik tarihler uydurulmaz. Aday/kart teşhisinin yanında sayfadaki “Kütüphane Kodu” metni sayısı gösterilir. Bu kontroller sınıfsız ve rastgele sınıflı DOM örnekleriyle doğrulanmıştır; kullanıcının canlı Meta sayfası bu ortamda incelenmemiştir.
+
+## Canlı durum barı
+
+Tarama sekmesinin en üstündeki sticky bar, 40 px kalın sayaçlarla reklam/scroll sayılarını ve Hazır, Taranıyor…, Durduruldu, Tamamlandı durumlarını gösterir. Nokta yalnızca tarama sırasında pulse yapar; sayaç değişiminde kısa tık animasyonu olur. Azaltılmış hareket tercihi iki animasyonu da kapatır. Sayılar `tr-TR` biçimindedir. `ad-count`, `scroll-count`, `scan-status` ID'leri korunmuştur; eski `.counter-grid` kaldırılmıştır.
+
+Content script her yeni reklam ve her scroll sonrasında `{type: "SCAN_PROGRESS", ads, scrolls, status, sessionId}` gönderir. Worker sekme/oturum sahipliğini ve monoton sayaçları doğrular, session kaydını sürümleyerek popup'a iletir; content script de onaylanan sayıları `chrome.storage.session.scanProgress` içine yazar. Popup açıldığında session verisini okur ve aktif oturumu doğrular; pencerenin kapanması açık Meta sekmesindeki taramayı durdurmaz. Yeni tarama ve Temizle sayaçları sıfırlar. Maksimuma ulaşıldığında Tamamlandı gösterilir. Geç veya eski oturuma ait mesajlar taramayı yeniden başlatmaz.
+
+Session alanı yalnızca bu genel sayaçlar için content script erişimine açılmıştır; Telegram sırları güvenilen bağlamlara özel `storage.local` içinde kalır. Browser oturumu sona ererse `storage.session` Chrome tarafından temizlenir; worker son kalıcı tarama durumunu yerelden yeniden oluşturur.
 
 ## Panel ve analiz
 

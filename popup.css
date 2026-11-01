@@ -104,10 +104,21 @@ input::placeholder { color: var(--muted); }
 :root[data-theme="dark"] .metric-blue { background: #29385b; color: #b3c4ff; }
 :root[data-theme="dark"] .metric-yellow { background: #413c29; color: #ddc379; }
 :root[data-theme="dark"] .date-grid strong { color: #adc2ff; }
-.counter-grid { display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--line); margin-top: 13px; padding-top: 11px; color: var(--muted); font-size: 9px; }
-.counter-grid strong { color: var(--ink); margin-left: 3px; }
-.scan-status { margin-left: auto; border-radius: 4px; padding: 3px 6px; color: #537a50; background: #75b96617; font-size: 9px; white-space: nowrap; }
-.scan-status.running { color: #2852d9; background: #2852d912; }
+.live-status-bar { position: sticky; top: 0; z-index: 3; padding: 12px; margin-bottom: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); box-shadow: var(--shadow); }
+.live-status-line { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 11px; font-weight: 600; color: var(--ink); padding: 0 1px 11px; }
+.status-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: var(--blue); }
+.status-dot.scanning { animation: scan-pulse 1.3s ease-in-out infinite; }
+#collected-summary { margin-left: auto; font-size: 10px; color: var(--muted); font-weight: 500; }
+.live-counters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.live-counter { min-width: 0; padding: 12px 6px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--soft); text-align: center; }
+.live-counter strong { display: block; font-size: 40px; line-height: 1.15; font-weight: 800; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
+.live-counter span { display: block; margin-top: 4px; font-size: 9px; letter-spacing: 1px; font-weight: 600; color: var(--muted); }
+.live-counter-ads strong { color: var(--blue); }
+.live-counter-scroll strong { color: var(--ink); }
+:root[data-theme="dark"] .live-counter-ads strong { color: #9fb9ff; }
+:root[data-theme="dark"] .status-dot { background: #9fb9ff; }
+@keyframes scan-pulse { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 #4269e53b; } 50% { opacity: .45; box-shadow: 0 0 0 4px #4269e500; } }
+@media (prefers-reduced-motion: reduce) { .status-dot.scanning { animation: none; } }
 .hint, .subtle { color: var(--muted); font-size: 10px; line-height: 1.5; }
 .hint { margin: 9px 0 0; }
 .scan-hint { font-size: 9px; text-align: center; margin-top: 8px; }

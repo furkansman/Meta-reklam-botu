@@ -8,6 +8,9 @@ const DEFAULTS = {
 };
 // Content scripts never need access to bot credentials.
 chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }).catch(() => {});
+// Only public counters live in session storage; credentials stay in trusted local storage.
+const sessionReady = chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS' });
+sessionReady.catch(() => {});
 
 // Serialize mutations, including tab events, to keep one scan and avoid lost writes.
 // Durable state lives in storage, so worker suspension does not lose ownership.
@@ -31,6 +34,22 @@ function validateSettings(settings) {
     throw new Error('Tarama ayarları geçersiz.');
   }
   return { autoScroll: settings.autoScroll, speed: settings.speed, maxAds: settings.maxAds };
+}
+function progressStatus(scan) {
+  return scan.running ? 'scanning' : ['limit','visible-complete','no-new-ads'].includes(scan.reason) ? 'completed' : scan.reason ? 'stopped' : 'ready';
+}
+async function publishProgress(state, override = null) {
+  await sessionReady;
+  const saved = await chrome.storage.session.get(['scanProgress','scanProgressRevision']);
+  const previous = saved.scanProgress;
+  const sameRunning = state.scan.running && previous?.sessionId === state.scan.sessionId;
+  const progress = { ads: sameRunning ? Math.max(state.ads.length,previous.ads) : state.ads.length,
+    scrolls: sameRunning ? Math.max(state.scrollCount,previous.scrolls) : state.scrollCount,
+    status: progressStatus(state.scan), ...override, sessionId: state.scan.sessionId || null,
+    revision: (saved.scanProgressRevision || 0) + 1 };
+  await chrome.storage.session.set({ scanProgress: progress, scanProgressRevision: progress.revision });
+  void chrome.runtime.sendMessage({ type:'SCAN_PROGRESS', ...progress }).catch(() => {});
+  return progress;
 }
 async function finish(state, reason, results = {}) {
   if (!state.scan.running) return;
@@ -58,10 +77,12 @@ async function finish(state, reason, results = {}) {
   }
   try {
     await chrome.storage.local.set({ ads, scrollCount, scan, history, telegramOutbox: outbox, competitorStats });
+    await publishProgress({ ...state, ads, scrollCount, scan });
     if (canQueue) { scheduleDelivery(); }
   } catch (error) {
     // If even the history entry exceeds quota, release ownership without rewriting results.
     await chrome.storage.local.set({ scan: { running: false, reason: 'storage-error' } });
+    await publishProgress({ ...state, scan: { running:false, reason:'storage-error' } });
     throw error;
   }
 }
@@ -94,9 +115,17 @@ async function handle(message, sender) {
   const type = message?.type;
   // Content scripts can only report results for their own active session.
   if (sender.tab) {
-    if (!['META_SCAN_PROGRESS', 'META_SCAN_FINISHED'].includes(type) || sender.frameId !== 0 ||
+    if (!['META_SCAN_PROGRESS', 'META_SCAN_FINISHED', 'SCAN_PROGRESS'].includes(type) || sender.frameId !== 0 ||
         !isLibrary(sender.url) || !state.scan.running || sender.tab.id !== state.scan.tabId ||
         message.sessionId !== state.scan.sessionId) throw new Error('Tarama oturumu artık etkin değil.');
+    if (type === 'SCAN_PROGRESS') {
+      const { scanProgress } = await chrome.storage.session.get('scanProgress');
+      if (!Number.isInteger(message.ads) || message.ads < state.ads.length || message.ads > state.settings.maxAds ||
+          !Number.isInteger(message.scrolls) || message.scrolls < state.scrollCount ||
+          (scanProgress?.sessionId === state.scan.sessionId && (message.ads < scanProgress.ads || message.scrolls < scanProgress.scrolls)) ||
+          !['scanning','stopped','completed'].includes(message.status)) throw new Error('Geçersiz canlı sayaç.');
+      return { ok:true, progress:await publishProgress(state,{ads:message.ads,scrolls:message.scrolls,status:message.status}) };
+    }
     const results = validateResults(message, state);
     try {
       if (type === 'META_SCAN_FINISHED') {
@@ -114,7 +143,7 @@ async function handle(message, sender) {
   }
   if (sender.url !== chrome.runtime.getURL('popup.html')) throw new Error('Bilinmeyen mesaj kaynağı.');
   switch (type) {
-    case 'GET_STATE': return { ok: true, state: await reconcile() };
+    case 'GET_STATE': { const current = await reconcile(); await publishProgress(current); return { ok:true, state:current }; }
     case 'START_SCAN': {
       const current = await reconcile();
       if (current.scan.running) throw new Error('Önce çalışan taramayı durdur.');
@@ -127,11 +156,12 @@ async function handle(message, sender) {
         await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['ad-data.js','content.js'] });
         collector = await chrome.tabs.sendMessage(tab.id, { type: 'META_SCAN_STATUS' }, { frameId: 0 });
       }
-      if (collector?.version !== '0.6.0') throw new Error('Meta sekmesinde eski tarama kodu çalışıyor. Sayfayı yenile; panelde v0.6.0 görünmelidir.');
+      if (collector?.version !== '0.7.0') throw new Error('Meta sekmesinde eski tarama kodu çalışıyor. Sayfayı yenile; panelde v0.7.0 görünmelidir.');
       const scan = { running: true, stopping: false, tabId: tab.id, sessionId: crypto.randomUUID(),
         sourceUrl: tab.url, startedAt: Date.now(), updatedAt: Date.now(), reason: 'running' };
       // Save ownership before starting; queued progress cannot overtake this write.
       await chrome.storage.local.set({ ads: [], scrollCount: 0, settings, scan });
+      await publishProgress({ ...current, ads:[], scrollCount:0, scan },{ ads:0, scrolls:0 });
       try {
         const startMessage = { type: 'META_SCAN_START', settings, tabId: tab.id, sessionId: scan.sessionId };
         let response;
@@ -145,6 +175,7 @@ async function handle(message, sender) {
         // A failed start must not erase the previous exported results.
         await chrome.storage.local.set({ ads: current.ads, scrollCount: current.scrollCount,
           scan: { ...scan, running: false, reason: 'start-error' } });
+        await publishProgress({ ...current, scan: { ...scan, running:false, reason:'start-error' } });
         throw new Error(`${error.message} Meta sekmesini yenileyip tekrar dene.`);
       }
       return { ok: true };
@@ -162,6 +193,7 @@ async function handle(message, sender) {
     case 'CLEAR_RESULTS':
       if ((await reconcile()).scan.running) throw new Error('Önce taramayı durdur.');
       await chrome.storage.local.set({ ads: [], scrollCount: 0, scan: { running: false, reason: '' } });
+      await publishProgress({ ...state, ads:[], scrollCount:0, scan:{running:false,reason:''} });
       break;
     case 'CLEAR_HISTORY': await chrome.storage.local.set({ history: [], telegramOutbox: [] }); break;
     case 'SAVE_TELEGRAM': {
@@ -217,7 +249,7 @@ async function handle(message, sender) {
   return { ok: true };
 }
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
-  if (sender.id !== chrome.runtime.id) return;
+  if (sender.id !== chrome.runtime.id || (message?.type === 'SCAN_PROGRESS' && !sender.tab)) return;
   enqueue(() => handle(message, sender)).then(respond, (error) => respond({ ok: false, error: error.message }));
   return true;
 });

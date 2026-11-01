@@ -9,18 +9,19 @@ const settings = { autoScroll: true, speed: 'fast', maxAds: 5 };
 function harness(shared = {}) {
   const store = shared.store || {};
   const sessions = shared.sessions || new Map();
+  const sessionStore = shared.sessionStore || {};
   const events = {};
   const requests = [];
   let apiStatus = 200;
   const event = (name) => ({ addListener(fn) { events[name] = fn; } });
   let activeTab = { id: 7, url };
-  let failStart = false, failQuota = false, collectorVersion = '0.6.0';
+  let failStart = false, failQuota = false, collectorVersion = '0.7.0';
   const chrome = {
-    runtime: { id: 'test', getURL: (path) => `chrome-extension://test/${path}`, onMessage: event('message'),
+    runtime: { id: 'test', async sendMessage() {}, getURL: (path) => `chrome-extension://test/${path}`, onMessage: event('message'),
       onStartup: event('startup'), onInstalled: event('installed') },
     scripting: { async executeScript() {} },
     alarms: { async create() {}, onAlarm: event('alarm') },
-    storage: { local: {
+    storage: { session: { async setAccessLevel() {}, async get(keys) { if (typeof keys === 'string') keys=[keys]; return structuredClone(Object.fromEntries(keys.filter(key=>key in sessionStore).map(key=>[key,sessionStore[key]]))); }, async set(values) { Object.assign(sessionStore,structuredClone(values)); } }, local: {
       async setAccessLevel() {},
       async get(keys) { if (typeof keys === 'string') keys = [keys]; return structuredClone(Object.fromEntries(keys.filter((key) => key in store).map((key) => [key, store[key]]))); },
       async set(values) { if (failQuota && values.ads?.some((ad) => ad.large)) throw new Error('QUOTA'); Object.assign(store, structuredClone(values)); }
@@ -39,7 +40,7 @@ function harness(shared = {}) {
   const send = (message, sender = { id: 'test', url: 'chrome-extension://test/popup.html' }) => new Promise((resolve) => events.message(message, sender, resolve));
   const progress = (overrides = {}, senderOverrides = {}) => send({ type: 'META_SCAN_PROGRESS', sessionId: store.scan.sessionId,
     ads: [{ id: '12345', text: 'Ad' }], scrollCount: 1, ...overrides }, { id: 'test', tab: { id: 7 }, frameId: 0, url, ...senderOverrides });
-  return { store, sessions, events, send, progress, requests, apiStatus: (status) => { apiStatus = status; }, collectorVersion: (version) => { collectorVersion = version; }, setTab: (tab) => { activeTab = tab; }, failStart: () => { failStart = true; }, failQuota: () => { failQuota = true; } };
+  return { store, sessions, sessionStore, events, send, progress, requests, apiStatus: (status) => { apiStatus = status; }, collectorVersion: (version) => { collectorVersion = version; }, setTab: (tab) => { activeTab = tab; }, failStart: () => { failStart = true; }, failQuota: () => { failQuota = true; } };
 }
 test('start/progress/stop/finish, single owner and idempotent history', async () => {
   const h = harness();
@@ -159,9 +160,24 @@ test('stale collector is rejected before clearing results; discovery is sanitize
   const response = await h.send({ type: 'START_SCAN', settings });
   assert.equal(response.ok, false); assert.match(response.error, /eski tarama kodu/);
   assert.equal(h.store.ads[0].id, 'previous');
-  h.collectorVersion('0.6.0');
+  h.collectorVersion('0.7.0');
   await h.send({ type: 'START_SCAN', settings });
-  await h.progress({ discovery: { candidates: 12, matched: 1, version: '0.6.0', token: 'private' } });
+  await h.progress({ discovery: { candidates: 12, matched: 1, version: '0.7.0', token: 'private' } });
   assert.equal(h.store.scan.discovery.candidates, 12);
   assert.equal(h.store.scan.discovery.token, undefined);
+});
+
+test('live counters persist across worker restart, reject stale reports and reset correctly', async () => {
+  const h = harness(); await h.send({ type:'START_SCAN', settings });
+  assert.equal(h.sessionStore.scanProgress.ads,0);assert.equal(h.sessionStore.scanProgress.status,'scanning');
+  const live = await h.progress({type:'SCAN_PROGRESS',ads:3,scrolls:2,status:'scanning'});
+  assert.equal(live.ok,true);assert.equal(live.progress.ads,3);assert.equal(h.sessionStore.scanProgress.scrolls,2);
+  assert.equal((await h.progress({type:'SCAN_PROGRESS',ads:2,scrolls:2,status:'scanning'})).ok,false);
+  const restored=harness(h);await restored.send({type:'GET_STATE'});
+  assert.equal(restored.sessionStore.scanProgress.ads,3);assert.equal(restored.sessionStore.scanProgress.scrolls,2);
+  await restored.progress({type:'META_SCAN_FINISHED',ads:[{id:'1'},{id:'2'},{id:'3'}],scrollCount:2,reason:'limit'});
+  assert.equal(restored.sessionStore.scanProgress.status,'completed');
+  assert.equal((await restored.progress({type:'SCAN_PROGRESS',ads:3,scrolls:3,status:'scanning'})).ok,false);
+  await restored.send({type:'CLEAR_RESULTS'});assert.equal(restored.sessionStore.scanProgress.ads,0);assert.equal(restored.sessionStore.scanProgress.scrolls,0);assert.equal(restored.sessionStore.scanProgress.status,'ready');
+  await restored.send({type:'START_SCAN',settings});assert.equal(restored.sessionStore.scanProgress.ads,0);
 });
