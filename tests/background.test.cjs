@@ -15,7 +15,7 @@ function harness(shared = {}) {
   let apiStatus = 200;
   const event = (name) => ({ addListener(fn) { events[name] = fn; } });
   let activeTab = { id: 7, url };
-  let failStart = false, failQuota = false, collectorVersion = '0.7.0';
+  let failStart = false, failQuota = false, collectorVersion = '0.8.0';
   const chrome = {
     runtime: { id: 'test', async sendMessage() {}, getURL: (path) => `chrome-extension://test/${path}`, onMessage: event('message'),
       onStartup: event('startup'), onInstalled: event('installed') },
@@ -160,9 +160,9 @@ test('stale collector is rejected before clearing results; discovery is sanitize
   const response = await h.send({ type: 'START_SCAN', settings });
   assert.equal(response.ok, false); assert.match(response.error, /eski tarama kodu/);
   assert.equal(h.store.ads[0].id, 'previous');
-  h.collectorVersion('0.7.0');
+  h.collectorVersion('0.8.0');
   await h.send({ type: 'START_SCAN', settings });
-  await h.progress({ discovery: { candidates: 12, matched: 1, version: '0.7.0', token: 'private' } });
+  await h.progress({ discovery: { candidates: 12, matched: 1, version: '0.8.0', token: 'private' } });
   assert.equal(h.store.scan.discovery.candidates, 12);
   assert.equal(h.store.scan.discovery.token, undefined);
 });
@@ -180,4 +180,12 @@ test('live counters persist across worker restart, reject stale reports and rese
   assert.equal((await restored.progress({type:'SCAN_PROGRESS',ads:3,scrolls:3,status:'scanning'})).ok,false);
   await restored.send({type:'CLEAR_RESULTS'});assert.equal(restored.sessionStore.scanProgress.ads,0);assert.equal(restored.sessionStore.scanProgress.scrolls,0);assert.equal(restored.sessionStore.scanProgress.status,'ready');
   await restored.send({type:'START_SCAN',settings});assert.equal(restored.sessionStore.scanProgress.ads,0);
+});
+
+test('uncheckpointed records survive tab loss and resume includes persisted IDs',async()=>{
+ const h=harness();await h.send({type:'START_SCAN',settings});
+ await h.progress({type:'SCAN_PROGRESS',ads:1,scrolls:1,status:'scanning',record:{id:'123456789012',primaryText:'Buffered ad'}});
+ assert.equal(h.store.ads.length,0);h.events.removed(7);await h.send({type:'GET_STATE'});
+ assert.equal(h.store.ads[0].id,'123456789012');
+ assert.equal((await h.send({type:'RESUME_SCAN',settings})).ok,true);assert.equal(h.store.ads.length,1);assert.equal(h.sessionStore.scanProgress.ads,1);
 });

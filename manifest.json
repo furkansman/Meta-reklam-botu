@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Meta Reklam Botu",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Meta reklam araştırmaları için tarama, geçmiş ve rakip takip paneli.",
   "permissions": [
     "activeTab",
@@ -20,6 +20,7 @@
       ],
       "js": [
         "ad-data.js",
+        "scan-loop.js",
         "content.js"
       ],
       "run_at": "document_idle"

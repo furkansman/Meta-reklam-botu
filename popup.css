@@ -152,3 +152,8 @@ footer { flex-shrink: 0; display: flex; justify-content: space-between; align-it
 .footer-state { display: inline-flex; align-items: center; gap: 4px; }
 .footer-state i { width: 5px; height: 5px; border-radius: 50%; background: #79a969; }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+
+#resume-scan { width: 100%; margin: 0 0 5px; color: var(--blue); }
+.live-status-line { flex-wrap: wrap; }
+#scan-status { min-width: 0; overflow-wrap: anywhere; }
+#meta-totals { margin: 4px 0 10px; }

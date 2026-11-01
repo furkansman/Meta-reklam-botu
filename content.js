@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const VERSION = '0.7.0';
+  const VERSION = '0.8.0';
   if (globalThis.__metaAdCollector?.version === VERSION) return;
   // A previous boolean guard belongs to an older, non-disposable collector.
   if (globalThis.__metaAdCollector === true) return;
@@ -77,14 +77,20 @@
     for (const marker of markers) {
       for (const match of matchesIds(marker)) {
         const id = match[2];
-        if (found.has(id)) continue;
+
         candidates++;
         for (let card = marker; card && card !== document.body; card = card.parentElement) {
           // Never use a shared result list to supply another ad's button/header.
           const ids = new Set(matchesIds(card).map((item) => item[2]));
           if (ids.size !== 1 || !ids.has(id)) break;
           const header = cardHeader(card);
-          if (header) { found.set(id, { element: card, header }); break; }
+          if (header) {
+            if(session && /birden fazla versiyonu var|multiple versions|several versions/i.test(textOf(card))){
+              let ids=session.versionElements.get(card);if(!ids){ids=new Set();session.versionElements.set(card,ids);}
+              if(!ids.has(id)){ids.add(id);session.versionEncounters++;}
+            }
+            if(!found.has(id))found.set(id, { element: card, header }); break;
+          }
         }
       }
     }
@@ -177,9 +183,9 @@
       libraryUrl: `https://www.facebook.com/ads/library/?id=${id}`, collectedAt: new Date().toISOString() };
   }
 
-  async function liveProgress(current, status = 'scanning') {
-    const response = await chrome.runtime.sendMessage({ type:'SCAN_PROGRESS', ads:current.ads.size,
-      scrolls:current.scrollCount, status, sessionId:current.sessionId });
+  async function liveProgress(current, status = 'scanning', record = null) {
+    const response = await chrome.runtime.sendMessage({ type:'SCAN_PROGRESS', record, ads:current.ads.size,
+      scrolls:current.scrollCount, status, reportedTotal:current.reportedTotal??null, versionEncounters:current.versionEncounters, recoveryRound:current.recoveryRound||0, sessionId:current.sessionId });
     if (!response?.ok) throw new Error(response?.error || 'Canlı sayaç güncellenemedi.');
     await chrome.storage.session.set({ scanProgress:response.progress });
   }
@@ -189,87 +195,64 @@
     if (!response?.ok) throw new Error(response?.error || 'Tarama durumu kaydedilemedi.');
   }
 
-  function waitForPage(current, delay, detectCards = false) {
-    return new Promise((resolve) => {
-      let observer;
-      let debounce;
-      let settled = false;
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        clearTimeout(debounce);
-        observer?.disconnect();
-        if (wake === finish) wake = null;
-        resolve();
-      };
-      const timer = setTimeout(finish, delay);
-      wake = finish;
-      if (detectCards) {
-        observer = new MutationObserver(() => {
-          if (debounce) return;
-          debounce = setTimeout(() => {
-            debounce = null;
-            if (current.stopped || location.href !== current.url || cards().size) finish();
-          }, 150);
-        });
-        observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['style', 'class', 'hidden', 'aria-hidden'] });
-      }
-      if (current.stopped) finish();
+  function waitUntil(current,predicate,timeout) {
+    return new Promise((resolve)=>{
+      let timer,observer,debounce,done=false;
+      const finish=()=>{if(done)return;done=true;clearTimeout(timer);clearTimeout(debounce);observer?.disconnect();if(wake===finish)wake=null;resolve();};
+      wake=finish;
+      const check=()=>{if(current.stopped||location.href!==current.url||predicate())finish();};
+      observer=new MutationObserver(()=>{clearTimeout(debounce);debounce=setTimeout(check,50);});
+      observer.observe(document.body,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['class','style','hidden','aria-hidden','aria-busy']});
+      timer=setTimeout(finish,timeout);check();
     });
   }
-
+  function scanMetadata(current) {
+    const page=textOf(document.body);
+    const matches=[...page.matchAll(/(?:[~≈]\s*)?(\d+(?:[.,\u00a0 ]\d{3})*)\s*(?:sonuç|results)(?![\p{L}])/giu)];
+    const estimate=matches.map(match=>Number(match[1].replace(/[^\d]/g,''))).find(Number.isSafeInteger);
+    if(estimate!==undefined)current.reportedTotal=estimate;
+    return {reportedTotal:current.reportedTotal??null,versionEncounters:current.versionEncounters,recoveryRound:current.recoveryRound||0};
+  }
+  function scrollTarget(records) {
+    let node=records.values().next().value?.element.parentElement;
+    while(node&&node!==document.body&&!(node.scrollHeight>node.clientHeight+50&&/auto|scroll/.test(getComputedStyle(node).overflowY)))node=node.parentElement;
+    return node&&node!==document.body?node:window;
+  }
   async function run(current) {
-    let idle = 0;
-    let empty = 0;
-    let reason = 'stopped';
-    try {
-      while (!current.stopped) {
-        if (!onLibrary() || location.href !== current.url) { reason = 'page-changed'; break; }
-        const before = current.ads.size;
-        let visibleCards = cards();
-        if (!visibleCards.size && !current.ads.size && !current.waitedForInitial) {
-          current.waitedForInitial = true;
-          // Initial React rendering/network loading can take longer than scroll speed.
-          // Wait for actual DOM cards before deciding the result set is empty.
-          await waitForPage(current, 12000, true);
-          if (current.stopped) break;
-          if (location.href !== current.url) { reason = 'page-changed'; break; }
-          visibleCards = cards();
-        }
-        empty = visibleCards.size ? 0 : empty + 1;
-        for (const [id, card] of visibleCards) {
-          if (current.ads.size >= current.settings.maxAds) break;
-          const isNew = !current.ads.has(id);
-          current.ads.set(id, extract(id, card));
-          if (isNew) await liveProgress(current);
-        }
-        idle = current.ads.size === before ? idle + 1 : 0;
-        await report(current, false, 'running');
-        if (current.ads.size >= current.settings.maxAds) { reason = 'limit'; break; }
-        if (empty >= 3 && !current.ads.size) { reason = 'no-cards'; break; }
-        if (!current.settings.autoScroll) { reason = current.ads.size ? 'visible-complete' : 'no-cards'; break; }
-        if (idle >= 8) { reason = 'no-new-ads'; break; }
-        if (current.stopped) break;
-        const firstCard = visibleCards.values().next().value;
-        let scroller = firstCard?.element.parentElement;
-        while (scroller && scroller !== document.body && !(scroller.scrollHeight > scroller.clientHeight + 50 && /auto|scroll/.test(getComputedStyle(scroller).overflowY))) scroller = scroller.parentElement;
-        const target = scroller && scroller !== document.body ? scroller : window;
-        target.scrollBy({ top: Math.max(500, (target === window ? window.innerHeight : target.clientHeight) * 0.85), behavior: 'instant' });
-        current.scrollCount++;
-        await liveProgress(current);
-        await waitForPage(current, DELAYS[current.settings.speed], !visibleCards.size);
+    let reason='stopped';
+    const metadata=()=>{Object.assign(discovery,scanMetadata(current));};
+    const collect=async()=>{
+      const before=current.ads.size;
+      metadata();
+      for(const [id,record] of cards()){
+        if(current.ads.has(id)||current.ads.size>=current.settings.maxAds)continue;
+        const ad=extract(id,record);current.ads.set(id,ad);
+        await liveProgress(current,'scanning',ad);
+        if(current.ads.size-current.savedCount>=25){await report(current,false,'running');current.savedCount=current.ads.size;}
       }
-    } catch (error) {
-      console.warn('Meta Reklam Botu: tarama kaydedilemedi.', error);
-      reason = 'error';
-    } finally {
-      try {
-        await liveProgress(current, ['limit','visible-complete','no-new-ads'].includes(reason) ? 'completed' : 'stopped');
-        await report(current, true, reason);
-      }
-      catch (error) { console.warn('Meta Reklam Botu: oturum kapatıldı.', error); }
-      if (session === current) session = null;
+      // Also checkpoint each completed DOM pass; partial passes still save every 25.
+      if(current.ads.size>before)current.recoveryRound=0;
+      metadata();await report(current,false,'running');current.savedCount=current.ads.size;await liveProgress(current);
+    };
+    const waitForNew=(timeout)=>waitUntil(current,()=>[...cards().keys()].some(id=>!current.ads.has(id)),timeout);
+    try{
+      if(!cards().size)await waitForNew(12000);
+      reason=await ScanLoop.run(current.settings,{
+        stopped:()=>current.stopped||!onLibrary()||location.href!==current.url,
+        count:()=>current.ads.size,collect,waitForNew,
+        scroll:async()=>{const target=scrollTarget(cards());target.scrollBy({top:Math.max(500,(target===window?innerHeight:target.clientHeight)*({slow:.6,medium:.85,fast:1.2}[current.settings.speed])),behavior:'instant'});current.scrollCount++;await liveProgress(current);},
+        recovery:async(round)=>{current.recoveryRound=round;metadata();await liveProgress(current);await report(current,false,'running');},
+        clickMore:async()=>{const button=[...document.querySelectorAll('button,[role="button"],a')].find(node=>visible(node)&&/^(daha fazla göster|daha çok göster|see more|load more|show more)$/i.test(normalized(node)));button?.click();},
+        bounce:async()=>{const target=scrollTarget(cards());target.scrollBy({top:-600,behavior:'instant'});target.scrollTo({top:target===window?document.scrollingElement.scrollHeight:target.scrollHeight,behavior:'instant'});current.scrollCount+=2;await liveProgress(current);},
+        waitSpinner:(timeout)=>waitUntil(current,()=>![...document.querySelectorAll('[role="progressbar"],[aria-busy="true"],[aria-label*="loading" i],[aria-label*="yüklen" i],[class*="spinner" i]')].some(visible),timeout)
+      });
+      if(location.href!==current.url)reason='page-changed';
+    }catch(error){console.warn('Meta Reklam Botu: tarama durdu.',error);reason='error';}
+    finally{
+      metadata();
+      try{await liveProgress(current,['limit','visible-complete','no-new-ads','meta-exhausted'].includes(reason)?'completed':'stopped');}catch{}
+      try{await report(current,true,reason);}catch(error){console.warn('Meta Reklam Botu: son kayıt gönderilemedi.',error);}
+      if(session===current)session=null;
     }
   }
 
@@ -287,12 +270,12 @@
     (async () => {
       if (!onLibrary()) throw new Error('Meta Reklam Kütüphanesi sayfasını aç.');
       if (session) throw new Error('Bu sekmede zaten bir tarama çalışıyor.');
-      const { settings, tabId, sessionId } = message;
+      const { settings, tabId, sessionId, resumeAds = [], resumeScrolls = 0, resumeVersionEncounters = 0, resumeReportedTotal = null } = message;
       if (!settings || !Number.isInteger(settings.maxAds) || settings.maxAds < 1 || settings.maxAds > 10000 ||
           !Object.hasOwn(DELAYS, settings.speed) || typeof settings.autoScroll !== 'boolean' || !Number.isInteger(tabId) || typeof sessionId !== 'string') {
         throw new Error('Tarama ayarları geçersiz.');
       }
-      const current = { settings, tabId, sessionId, ads: new Map(), scrollCount: 0, startedAt: Date.now(), url: location.href, stopped: false };
+      const current = { settings, tabId, sessionId, ads: new Map(resumeAds.map(ad=>[ad.id,ad])), savedCount:resumeAds.length, versionElements:new WeakMap(), versionEncounters:resumeVersionEncounters, reportedTotal:resumeReportedTotal, scrollCount:resumeScrolls, startedAt: Date.now(), url: location.href, stopped: false };
       session = current;
       respond({ ok: true });
       void run(current);

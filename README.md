@@ -8,7 +8,7 @@ Manifest V3 Chrome eklentisi. Meta Reklam Kütüphanesi'nin yüklenmiş reklam k
 2. Chrome'da `chrome://extensions` sayfasını açın, **Geliştirici modu**nu etkinleştirin ve **Paketlenmemiş öğe yükle** ile depo klasörünü seçin.
 3. `https://www.facebook.com/ads/library/` sayfasını açın. Eklenti güncellendiyse hem eklentiyi hem bu sekmeyi yenileyin.
 4. Meta sayfasından arama, ülke ve reklam durumu filtrelerini seçin. Eklentide maksimum reklam sayısını, scroll hızını ve otomatik scroll tercihini ayarlayıp **Scraping Başlat** düğmesine basın.
-5. Panel kapansa da açık sayfadaki tarama devam eder. Aynı anda bir tarama çalışır. Durdur düğmesi, maksimum sayı, sekmenin kapanması/değişmesi veya art arda sekiz kontrolde yeni reklam bulunamaması taramayı sonlandırır. Otomatik scroll kapalıysa yalnızca mevcut görünür kartlar işlenir. İlk kartlar henüz yüklenmediyse DOM değişikliklerini izleyerek 12 saniyeye kadar bekler; durdur komutu bu beklemeyi hemen keser. Ardından üç kontrolde hiç kart bulunamazsa iki scroll denemesinden sonra açıklayıcı uyarıyla durur. İç içe kaydırılabilir sonuç alanları varsa scroll o alana uygulanır.
+5. Panel kapansa da açık sayfadaki tarama devam eder. Her normal kaydırmadan sonra MutationObserver ile yeni benzersiz kartlar beklenir (en fazla 4 saniye; yeni kart gelince erken devam eder). Hız, kaydırma mesafesini belirler. Altı ardışık kaydırmada yeni ID gelmezse en fazla üç kurtarma turu yapılır: uygun Daha fazla göster/See more/Load more düğmesi, 600 px yukarı ve tekrar en alta scroll, görünür yükleme göstergesi için en fazla 10 saniye bekleme ve 1/2/4 saniyelik artan DOM bekleme üst sınırı. İlk verimsiz kaydırmadan itibaren iki dakikalık bütçe uygulanır; yeni ID gelirse bütçe sıfırlanır. Başarısız kurtarmada durum ve teşhis “Meta daha fazla reklam yüklemedi (X benzersiz reklam)” der. Otomatik scroll kapalıysa yalnızca yüklenmiş görünür kartlar alınır. İlk yükleme için 12 saniyeye kadar DOM beklemesi vardır; Durdur tüm beklemeleri keser.
 6. Tarama bitince CSV veya JSON indirin. Filtreler sekmesindeki medya/platform tercihleri dışa aktarıma uygulanır; sayaç toplam toplanan reklamları gösterir. Temizle yalnızca son sonuçları siler; geçmiş ayrı temizlenir.
 
 Son sonuçlar her başarılı yeni taramada yenilenir. Geçmiş son 100 oturumu listeler; ayrıntılı reklam arşivleri yaklaşık 3 MB bütçeyle saklanır. Bütçeyi aşan eski kayıtlar özet olarak korunur ve arayüzde belirtilir. Geçmiş sekmesinden tek oturumu veya tüm mevcut arşivleri CSV/JSON indirebilirsiniz. Eski sürümlerden kalan yalnızca özet kayıtlar için reklam verisi sonradan üretilemez.
@@ -24,9 +24,17 @@ Rakip Takip listesine marka ekleyip Reklamları aç bağlantısıyla aramasını
 
 ## Güncel sürümü yükleme
 
-Bu paket **v0.7.0** olarak sürümlenmiştir. `chrome://extensions` üzerinden doğru depo klasöründen yüklenen eklentiyi yenileyin ve açık Meta sekmesini bir kez yeniden yükleyin. Panelin altında v0.7.0 görünmelidir; görünmüyorsa Chrome başka/eski bir klasörü çalıştırıyordur. Worker, eski sayfa betiğini sürüm kontrolüyle saptar ve önceki sonuçları silmeden yenileme ister. Tarama panelindeki aday/kart sayıları güncel betiğin gerçekten hangi kapsayıcıları işlediğini gösterir.
+Bu paket **v0.8.0** olarak sürümlenmiştir. `chrome://extensions` üzerinden doğru depo klasöründen yüklenen eklentiyi yenileyin ve açık Meta sekmesini bir kez yeniden yükleyin. Panelin altında v0.8.0 görünmelidir; görünmüyorsa Chrome başka/eski bir klasörü çalıştırıyordur. Worker, eski sayfa betiğini sürüm kontrolüyle saptar ve önceki sonuçları silmeden yenileme ister. Tarama panelindeki aday/kart sayıları güncel betiğin gerçekten hangi kapsayıcıları işlediğini gösterir.
 
 Kart keşfi artık hiçbir sınıf/border seçicisine dayanmaz. `(Kütüphane Kodu|Library ID)\s*:?\s*(\d{10,})` metninin en küçük eşleşen öğesinden yukarı çıkar; aynı ID ile reklam detayları kontrolünü ve Sponsorlu/Sponsored metninin üstündeki reklamveren adını kapsayan ilk öğeyi seçer. Farklı ID içeren üst sonuç listeleri kart olarak kabul edilmez. Aynı ID bir oturumda yalnızca bir kez saklanır. Türkçe/İngilizce başlangıç tarihleri ISO gün olarak çıkarılır; platform etiketleri ve görsel/video türü de kaydedilir. Eksik tarihler uydurulmaz. Aday/kart teşhisinin yanında sayfadaki “Kütüphane Kodu” metni sayısı gösterilir. Bu kontroller sınıfsız ve rastgele sınıflı DOM örnekleriyle doğrulanmıştır; kullanıcının canlı Meta sayfası bu ortamda incelenmemiştir.
+
+## Kurtarma, kayıt güvenliği ve devam
+
+Toplanan veriler her 25 yeni reklamda ve her tamamlanan DOM geçişinde `storage.local` içine yazılır. Aradaki onaylanmış kayıtlar worker'ın session tamponunda tutulur; sekme kapanır/yenilenirse worker bunları son kalıcı veriyle birleştirir. Popup kapanması taramayı veya tamponu silmez. Browser'ın tamamen kapanması session alanını temizlediğinden, bu durumda son kalıcı checkpoint geçerlidir.
+
+**Devam Et** son kalıcı reklam kümesini ve kaydırma sayısını yükleyerek mevcut Meta sekmesinde devam eder; eski ID'ler atlanır. Meta'nın sanallaştırılmış liste konumu otomatik geri getirilemez: sayfa yenilendiyse daha önce yüklenmiş kartların üzerinden geçilmesi gerekebilir. Maksimum sayı kayıtlı reklam sayısından yüksek olmalıdır. Yeni Taramayı Başlat ayrı ve sıfırdan bir taramadır.
+
+Panel `~1.100 sonuç / results` metninden Meta'nın yaklaşık sayısını okur, benzersiz toplanan sayıdan ayrı gösterir. Bu tahmin kesin hedef veya tüm kayıtların erişilebilirlik garantisi değildir. “Birden fazla versiyonu var / multiple versions” etiketi taşıyan kartların her ayrı DOM gösterimi bir karşılaşma sayılır; aynı DOM öğesinin tekrar kontrolü sayılmaz. Bu değer gerçek versiyon adedinin tahmini değildir ve devam edilen yeni sayfa gösterimleri yeni karşılaşma sayılabilir.
 
 ## Canlı durum barı
 
@@ -68,6 +76,7 @@ Node.js 20+ ile bağımlılıksız worker testleri:
 ```sh
 node tests/background.test.cjs
 node tests/export.test.cjs
+node tests/scan-loop.test.cjs
 ```
 
 Örnek CSV ve XLSX yapısını ayrıca Python `openpyxl` ile doğrulamak için: `python3 tests/verify-export.py` (önce export testini çalıştırın).

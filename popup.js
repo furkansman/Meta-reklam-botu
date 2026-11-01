@@ -142,14 +142,15 @@ function animateCount(node, value) {
 }
 function renderLiveBar() {
   const fallback = { ads:state.ads.length, scrolls:state.scrollCount,
-    status:state.scan?.running ? 'scanning' : ['limit','visible-complete','no-new-ads'].includes(state.scan?.reason) ? 'completed' : state.scan?.reason ? 'stopped' : 'ready' };
+    status:state.scan?.running ? 'scanning' : ['limit','visible-complete','no-new-ads','meta-exhausted'].includes(state.scan?.reason) ? 'completed' : state.scan?.reason ? 'stopped' : 'ready' };
   const useLive = liveProgress && (liveProgress.sessionId === (state.scan?.sessionId || null));
   const progress = useLive ? liveProgress : fallback;
   animateCount($('#ad-count'),progress.ads);
   animateCount($('#scroll-count'),progress.scrolls);
   const labels = { ready:'Hazır', scanning:'Taranıyor…', stopped:'Durduruldu', completed:`Tamamlandı (${progress.ads.toLocaleString('tr-TR')} reklam)` };
-  $('#scan-status').textContent = !ready ? 'Yükleniyor…' : labels[progress.status];
+  $('#scan-status').textContent = !ready ? 'Yükleniyor…' : state.scan?.reason==='meta-exhausted' ? `Meta daha fazla reklam yüklemedi (${progress.ads.toLocaleString('tr-TR')} benzersiz reklam)` : progress.recoveryRound ? `Yükleme kurtarılıyor (${progress.recoveryRound}/3)` : labels[progress.status];
   $('#collected-summary').textContent = `${progress.ads.toLocaleString('tr-TR')} reklam toplandı`;
+  $('#meta-totals').textContent=`Meta’nın bildirdiği: ${progress.reportedTotal!=null?'~'+progress.reportedTotal:'bilinmiyor'} / Toplanan benzersiz: ${progress.ads.toLocaleString('tr-TR')} · Çoklu versiyon karşılaşması: ${progress.versionEncounters||0}`;
   $('#scan-dot').classList.toggle('scanning',ready && progress.status === 'scanning');
 }
 function applyProgress(progress) {
@@ -168,11 +169,14 @@ function renderScan() {
   renderDateAnalysis();
   const exported = AdData.rows(state.ads);
   const filled = (column) => `${exported.filter((row) => row[column] !== '').length}/${exported.length}`;
-  const completeness = `Başlık: ${filled('Başlık (Headline)')}, CTA: ${filled('CTA')}, Tarih: ${filled('Yayın Başlangıç')}, Medya URL: ${filled('Medya URL')}, Hedef URL: ${filled('Hedef URL')}`;
+  const completeness = (state.scan?.reason==='meta-exhausted'?`Meta daha fazla reklam yüklemedi (${state.ads.length.toLocaleString('tr-TR')} benzersiz reklam) · `:'')+`Başlık: ${filled('Başlık (Headline)')}, CTA: ${filled('CTA')}, Tarih: ${filled('Yayın Başlangıç')}, Medya URL: ${filled('Medya URL')}, Hedef URL: ${filled('Hedef URL')}`;
   const discovery = state.scan?.discovery;
+  const totals=liveProgress && liveProgress.sessionId===state.scan?.sessionId?liveProgress:discovery;
+  $('#meta-totals').textContent=`Meta’nın bildirdiği: ${totals?.reportedTotal!=null?'~'+totals.reportedTotal:'bilinmiyor'} / Toplanan benzersiz: ${(liveProgress && liveProgress.sessionId===state.scan?.sessionId?liveProgress.ads:state.ads.length).toLocaleString('tr-TR')} · Çoklu versiyon karşılaşması: ${totals?.versionEncounters||0}`;
   $('#scan-diagnostics').textContent = discovery ? `Sayfa betiği v${discovery.version} · ${discovery.candidates} aday / ${discovery.matched} kart · Kütüphane Kodu: ${discovery.libraryCodeTexts || 0} · ${completeness}` : completeness;
   $('#export-summary').textContent = `${filteredAds().length} / ${state.ads.length} reklam dışa aktarılacak`;
 
+  $('#resume-scan').disabled=!ready||busy||running||!state.ads.length;
   $('#start-scan').disabled = !ready || busy || running;
   $('#stop-scan').disabled = !ready || busy || !running || Boolean(state.scan?.stopping);
   $('#auto-scroll').disabled = !ready || busy || running;
@@ -199,6 +203,8 @@ $('#scan-form').addEventListener('submit', (event) => {
     feedback('Tarama başlatıldı. Açık Meta sayfasında devam eder.');
   }).then(renderScan);
 });
+
+$('#resume-scan').addEventListener('click',(event)=>perform(event.currentTarget,async()=>{await command('RESUME_SCAN',{settings:{autoScroll:$('#auto-scroll').checked,speed:$('#scroll-speed').value,maxAds:Number($('#max-ads').value)}});await refreshState();}));
 
 $('#stop-scan').addEventListener('click', (event) => perform(event.currentTarget, async () => {
   await command('STOP_SCAN');
@@ -293,6 +299,7 @@ $('#filters-form').addEventListener('submit', (event) => {
 
 const REASONS = {
   limit: 'Maksimum reklam sayısına ulaşıldı.', 'visible-complete': 'Görünür reklamlar toplandı.',
+  'meta-exhausted':'Meta daha fazla reklam yüklemedi. Toplanan veriler korunuyor; Devam Et ile yeniden deneyebilirsin.',
   'no-cards': 'Reklam kartı bulunamadı. Meta sayfasında sonuçların yüklenmesini bekle; giriş/çerez pencerelerini kapatıp tekrar dene.',
   'no-new-ads': 'Yeni reklam bulunamadı. Sayfa yüklemesini ve dilini kontrol et.',
   'page-changed': 'Sayfa değiştiği için tarama durdu.', error: 'Tarama sırasında hata oluştu.',
