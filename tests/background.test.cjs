@@ -14,7 +14,7 @@ function harness(shared = {}) {
   let apiStatus = 200;
   const event = (name) => ({ addListener(fn) { events[name] = fn; } });
   let activeTab = { id: 7, url };
-  let failStart = false, failQuota = false;
+  let failStart = false, failQuota = false, collectorVersion = '0.4.0';
   const chrome = {
     runtime: { id: 'test', getURL: (path) => `chrome-extension://test/${path}`, onMessage: event('message'),
       onStartup: event('startup'), onInstalled: event('installed') },
@@ -28,7 +28,7 @@ function harness(shared = {}) {
     tabs: {
       async query() { return [activeTab]; },
       async sendMessage(tabId, msg) {
-        if (msg.type === 'META_SCAN_STATUS') return { running: sessions.has(tabId), sessionId: sessions.get(tabId) };
+        if (msg.type === 'META_SCAN_STATUS') return { running: sessions.has(tabId), sessionId: sessions.get(tabId), version: collectorVersion };
         if (msg.type === 'META_SCAN_START') { if (failStart) throw new Error('No receiver'); sessions.set(tabId, msg.sessionId); }
         if (msg.type === 'META_SCAN_STOP') sessions.delete(tabId);
         return { ok: true };
@@ -39,7 +39,7 @@ function harness(shared = {}) {
   const send = (message, sender = { id: 'test', url: 'chrome-extension://test/popup.html' }) => new Promise((resolve) => events.message(message, sender, resolve));
   const progress = (overrides = {}, senderOverrides = {}) => send({ type: 'META_SCAN_PROGRESS', sessionId: store.scan.sessionId,
     ads: [{ id: '12345', text: 'Ad' }], scrollCount: 1, ...overrides }, { id: 'test', tab: { id: 7 }, frameId: 0, url, ...senderOverrides });
-  return { store, sessions, events, send, progress, requests, apiStatus: (status) => { apiStatus = status; }, setTab: (tab) => { activeTab = tab; }, failStart: () => { failStart = true; }, failQuota: () => { failQuota = true; } };
+  return { store, sessions, events, send, progress, requests, apiStatus: (status) => { apiStatus = status; }, collectorVersion: (version) => { collectorVersion = version; }, setTab: (tab) => { activeTab = tab; }, failStart: () => { failStart = true; }, failQuota: () => { failQuota = true; } };
 }
 test('start/progress/stop/finish, single owner and idempotent history', async () => {
   const h = harness();
@@ -151,4 +151,17 @@ test('competitor scans compare collected IDs against the previous scan', async (
   assert.equal(h.store.competitorStats.test.count, 2);
   assert.equal(h.store.competitorStats.test.newCount, 1);
   assert.equal(h.store.history[1].ads.length, 1);
+});
+
+test('stale collector is rejected before clearing results; discovery is sanitized', async () => {
+  const h = harness({ store: { ads: [{ id: 'previous' }], scrollCount: 2 } });
+  h.collectorVersion(undefined);
+  const response = await h.send({ type: 'START_SCAN', settings });
+  assert.equal(response.ok, false); assert.match(response.error, /eski tarama kodu/);
+  assert.equal(h.store.ads[0].id, 'previous');
+  h.collectorVersion('0.4.0');
+  await h.send({ type: 'START_SCAN', settings });
+  await h.progress({ discovery: { candidates: 12, matched: 1, version: '0.4.0', token: 'private' } });
+  assert.equal(h.store.scan.discovery.candidates, 12);
+  assert.equal(h.store.scan.discovery.token, undefined);
 });

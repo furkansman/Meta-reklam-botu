@@ -1,7 +1,10 @@
 (() => {
   'use strict';
-  if (globalThis.__metaAdCollector) return;
-  globalThis.__metaAdCollector = true;
+  const VERSION = '0.4.0';
+  if (globalThis.__metaAdCollector?.version === VERSION) return;
+  // A previous boolean guard belongs to an older, non-disposable collector.
+  if (globalThis.__metaAdCollector === true) return;
+  globalThis.__metaAdCollector?.dispose?.();
 
   const ID_LABEL = /(?:Library ID|Ad Library ID|Kütüphane (?:Kimliği|Numarası|No(?:su)?)|Reklam Kütüphanesi Kimliği)\s*[:：]?\s*(\d{5,})/i;
   const LABEL = /Library ID|Ad Library ID|Kütüphane (?:Kimliği|Numarası|No)|Reklam Kütüphanesi Kimliği/i;
@@ -23,7 +26,11 @@
     } catch { return null; }
   }
 
-  const CARD_SELECTOR = 'div._7jvw,div[role="region"],article,[role="article"],div[style*="border" i],[data-pagelet*="AdLibrary"],[data-ad-id]';
+  const CARD_SELECTORS = [
+    'div._7jvw', 'div[role="region"]', 'article', '[role="article"]',
+    'div[style*="border" i]', '[data-pagelet*="AdLibrary"]', '[data-ad-id]'
+  ];
+  const SEMANTIC_CARD = 'div._7jvw,article,[role="article"],div[role="region"]';
   const MESSAGE_SELECTOR = '[data-ad-preview="message"],[data-ad-comet-preview="message"]';
   function cardIds(card) {
     const ids = [...textOf(card).matchAll(new RegExp(ID_LABEL.source, 'gi'))].map((match) => match[1]);
@@ -60,66 +67,68 @@
     }
     return `dom-${(first >>> 0).toString(16)}-${(second >>> 0).toString(16)}`;
   }
+  let discovery = { candidates: 0, matched: 0, selectors: {} };
   function cards() {
-    const found = new Map();
-    const accepted = new Set();
-    function add(id, card) {
-      if (!visible(card) || accepted.has(card)) return;
-      if (!found.has(id)) { found.set(id, card); accepted.add(card); }
+    const pool = new Set();
+    const counts = {};
+    // Query separately: a Meta layout may only expose one of these contracts.
+    for (const selector of CARD_SELECTORS) {
+      const nodes = document.querySelectorAll(selector);
+      counts[selector] = nodes.length;
+      nodes.forEach((node) => pool.add(node));
     }
-    // First resolve explicit IDs, even when their label and number are separate nodes.
-    const markers = [...document.querySelectorAll('[data-ad-id],a[href*="/ads/library"]')];
+    // A labelled ID can still locate a card when no known class/border is present.
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     let node;
+    const markers = [...document.querySelectorAll('[data-ad-id],a[href*="/ads/library"]')];
     while ((node = walker.nextNode())) if (LABEL.test(node.textContent)) markers.push(node.parentElement);
     for (const marker of markers) {
-      let card = marker;
-      let ids = cardIds(card);
-      for (let depth = 0; !ids.length && depth < 4 && card.parentElement && card.parentElement !== document.body; depth++) {
-        card = card.parentElement; ids = cardIds(card);
+      let parent = marker;
+      let largest;
+      for (let depth = 0; depth < 12 && parent && parent !== document.body; depth++, parent = parent.parentElement) {
+        if (parent.matches('main,[role="main"]')) break;
+        const ids = cardIds(parent);
+        if (ids.length > 1) break;
+        if (ids.length === 1) largest = parent;
+        if (parent.matches(SEMANTIC_CARD) && ids.length === 1 && parent.querySelector('a[href],img,video')) break;
       }
-      if (ids.length !== 1) continue;
-      const id = ids[0];
-      for (let depth = 0; depth < 14 && card.parentElement && card.parentElement !== document.body; depth++) {
-        if (card.matches('article,[role="article"],div._7jvw,div[role="region"]') && card.querySelector('a[href],video,img')) break;
-        const parent = card.parentElement;
-        if (parent.matches('main,[role="main"]') || parent.querySelectorAll('div._7jvw,article,[role="article"]').length > 1 || cardIds(parent).some((other) => other !== id)) break;
-        // A border wrapping a complete message/link area is a card boundary,
-        // whereas small bordered badges/buttons are not.
-        if (card.matches(CARD_SELECTOR) && card.querySelector(MESSAGE_SELECTOR) && card.querySelector('a[href],video,img')) break;
-        card = parent;
-      }
-      add(id, card);
+      if (largest) pool.add(largest);
     }
-    // New layouts sometimes omit the ID until the detail dialog is opened.
-    // Border alone is insufficient: require ad-specific content and a creative/link.
-    const candidates = [...document.querySelectorAll(CARD_SELECTOR)].filter((card) => {
-      if (!visible(card) || cardIds(card).length) return false;
+    const cache = new WeakMap();
+    function evidence(card) {
+      if (cache.has(card)) return cache.get(card);
+      const ids = cardIds(card);
       const text = textOf(card);
       const hasMessage = Boolean(card.querySelector(MESSAGE_SELECTOR));
-      const hasAdStatus = /(?:Started running|Active|Inactive|Yayınlanmaya başla|Aktif|Etkin)/i.test(text);
-      const hasCreative = Boolean(card.querySelector('video,img,a[href]'));
-      const externalLink = [...card.querySelectorAll('a[href]')].some((link) => {
-        const url = safeUrl(link.href);
-        if (!url) return false;
-        const host = new URL(url).hostname;
-        return host !== 'facebook.com' && !host.endsWith('.facebook.com');
-      });
-      // Meta's _7jvw is a card shell; a generic region/border still needs
-      // ad signals to avoid collecting navigation, dialogs, and result grids.
-      const knownShell = card.matches('div._7jvw');
-      const regionCreative = card.matches('div[role="region"]') && externalLink && Boolean(card.querySelector('video,img'));
-      return hasCreative && (hasMessage || ((knownShell || regionCreative || hasAdStatus) &&
-        (externalLink || card.querySelector('video') || knownShell) && adText(card).length >= 15));
-    });
-    for (const card of candidates) {
-      if ([...accepted].some((existing) => card.contains(existing) || existing.contains(card))) continue;
-      const children = candidates.filter((candidate) => candidate !== card && card.contains(candidate));
-      // Reject list/grid wrappers containing separate candidate card branches.
-      if (children.some((child, index) => children.slice(index + 1).some((other) => !child.contains(other) && !other.contains(child)))) continue;
-      if (card.querySelectorAll(MESSAGE_SELECTOR).length > 1) continue;
-      add(fingerprint(card), card);
+      const links = [...card.querySelectorAll('a[href]')].map((link) => safeUrl(link.href)).filter(Boolean);
+      const hasMedia = Boolean(card.querySelector('img,video'));
+      const hasStatus = /(?:Started running|Active|Inactive|Yayınlanmaya başla|Aktif|Etkin)/i.test(text);
+      const semantic = card.matches(SEMANTIC_CARD);
+      const payload = text.replace(new RegExp(ID_LABEL.source, 'gi'), '').trim();
+      const enoughContent = payload.length >= 15;
+      // A bare border, ID badge, navigation or image alone is not an advertisement.
+      const supported = visible(card) && ids.length <= 1 && ((ids.length === 1 && payload.length > 0) ||
+        ((hasMessage || enoughContent) && (links.length > 0 || hasMedia) && (semantic || hasMessage || hasStatus)));
+      const value = { ids, supported };
+      cache.set(card, value);
+      return value;
     }
+    const candidates = [...pool].filter((card) => evidence(card).supported);
+    // DOM order makes a complete card win over its nested decorative borders.
+    candidates.sort((a, b) => a === b ? 0 : a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
+    const found = new Map();
+    const accepted = [];
+    for (const card of candidates) {
+      if (accepted.some((other) => other.contains(card))) continue;
+      const own = evidence(card);
+      const descendants = candidates.filter((other) => other !== card && card.contains(other));
+      const branches = descendants.filter((other) => !descendants.some((ancestor) => ancestor !== other && ancestor.contains(other)));
+      if (branches.length > 1 && (!own.ids.length || branches.filter((branch) => branch.matches(SEMANTIC_CARD)).length > 1)) continue;
+
+      const id = own.ids[0] || fingerprint(card);
+      if (!found.has(id)) { found.set(id, card); accepted.push(card); }
+    }
+    discovery = { candidates: pool.size, matched: found.size, selectors: counts, version: VERSION };
     return found;
   }
 
@@ -150,7 +159,7 @@
 
   async function report(current, finished, reason) {
     const response = await chrome.runtime.sendMessage({ type: finished ? 'META_SCAN_FINISHED' : 'META_SCAN_PROGRESS',
-      sessionId: current.sessionId, ads: [...current.ads.values()], scrollCount: current.scrollCount, reason });
+      sessionId: current.sessionId, ads: [...current.ads.values()], scrollCount: current.scrollCount, reason, discovery });
     if (!response?.ok) throw new Error(response?.error || 'Tarama durumu kaydedilemedi.');
   }
 
@@ -232,9 +241,9 @@
     }
   }
 
-  chrome.runtime.onMessage.addListener((message, sender, respond) => {
+  const onMessage = (message, sender, respond) => {
     if (sender.id !== chrome.runtime.id) return;
-    if (message?.type === 'META_SCAN_STATUS') { respond({ running: Boolean(session), sessionId: session?.sessionId }); return; }
+    if (message?.type === 'META_SCAN_STATUS') { respond({ running: Boolean(session), sessionId: session?.sessionId, version: VERSION }); return; }
     if (message?.type === 'META_SCAN_STOP') {
       if (session && message.sessionId !== session.sessionId) { respond({ ok: false }); return; }
       if (session) session.stopped = true;
@@ -257,6 +266,13 @@
       void run(current);
     })().catch((error) => respond({ ok: false, error: error.message }));
     return true;
-  });
-  addEventListener('pagehide', () => { if (session) session.stopped = true; wake?.(); });
+  };
+  const onPageHide = () => { if (session) session.stopped = true; wake?.(); };
+  chrome.runtime.onMessage.addListener(onMessage);
+  addEventListener('pagehide', onPageHide);
+  globalThis.__metaAdCollector = { version: VERSION, dispose() {
+    onPageHide();
+    chrome.runtime.onMessage.removeListener(onMessage);
+    removeEventListener('pagehide', onPageHide);
+  } };
 })();

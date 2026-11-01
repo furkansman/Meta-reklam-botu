@@ -22,9 +22,15 @@ Rakip Takip listesine marka ekleyip Reklamları aç bağlantısıyla aramasını
 - `popup.html`, `popup.css`, `popup.js`: Dört sekmeli panel, durum/sayaçlar, komutlar, filtreli dışa aktarma ve erişilebilir klavye geçişleri.
 - `manifest.json`: MV3 worker ve yalnızca Meta Ad Library sayfalarında etkin content script. `activeTab`, `storage`, `scripting` ve `alarms` izinleri kullanılır. Host izinleri `www.facebook.com` ve `api.telegram.org` ile sınırlıdır. Scripting, açık Meta sekmesine content script bağlantısı eksikse betiği yüklemek içindir; alarms, Telegram yeniden denemelerini sürdürür. Chrome 120+ gerektirir.
 
+## Güncel sürümü yükleme
+
+Bu paket **v0.4.0** olarak sürümlenmiştir. `chrome://extensions` üzerinden doğru depo klasöründen yüklenen eklentiyi yenileyin ve açık Meta sekmesini bir kez yeniden yükleyin. Panelin altında v0.4.0 görünmelidir; görünmüyorsa Chrome başka/eski bir klasörü çalıştırıyordur. Worker, eski sayfa betiğini sürüm kontrolüyle saptar ve önceki sonuçları silmeden yenileme ister. Tarama panelindeki aday/kart sayıları güncel betiğin gerçekten hangi kapsayıcıları işlediğini gösterir.
+
+Seçici döngüsü `_7jvw`, `role=region`, `article`, border ve diğer semantik adayları ayrı ayrı tarar; düz metin/link kartları da desteklenir. İç içe dekoratif öğeler ve sonuç listeleri ayrı reklam diye sayılmaz. Bilinen kimliği olmayan kartlar parmak iziyle ayrılır. Bu kontroller temsilî DOM örnekleriyle doğrulanmıştır; kullanıcının güncel canlı Meta sayfasındaki HTML bu ortamda incelenmemiştir.
+
 ## Panel ve analiz
 
-Panel `width: 420px !important; min-width: 420px !important;` ile sabit genişlik ve 550 px minimum yüksekliktedir; üstteki tema düğmesi açık/koyu görünümü değiştirir ve tercihi yerelde saklar. Hesap sekmesi yoktur. Tarama, Geçmiş, Rakip Takip ve Filtreler sekmeleri önceki veri/Telegram işlevlerini korur.
+Panel `width: 420px !important; min-width: 420px !important;` ile sabit 420 px genişlik ve 600 px yüksekliktedir; uzun sekmeler içeriden kaydırılır; üstteki tema düğmesi açık/koyu görünümü değiştirir ve tercihi yerelde saklar. Hesap sekmesi yoktur. Tarama, Geçmiş, Rakip Takip ve Filtreler sekmeleri önceki veri/Telegram işlevlerini korur.
 
 Dışa Aktar satırındaki Excel düğmesi Excel'in açabildiği gerçek SpreadsheetML çalışma kitabı (`.xml`) indirir; CSV dosyasının uzantısını değiştirmez. Tüm hücreler metin olarak kodlanır. CSV ve JSON seçenekleri de kullanılabilir.
 

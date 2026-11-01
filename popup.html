@@ -8,7 +8,7 @@
   <script src="popup.js" defer></script>
 </head>
 <body class="popup-body">
-  <div class="popup-container">
+  <div class="popup-container" aria-label="Meta Reklam Botu paneli">
     <header class="header" aria-label="Meta Reklam Botu başlığı">
       <div class="brand-row">
         <span class="brand-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></svg></span>
@@ -56,6 +56,7 @@
           </div>
         </section>
         <div class="counter-grid"><span>Reklam Sayısı <strong id="ad-count">0</strong></span><span>Scroll Sayısı <strong id="scroll-count">0</strong></span><span id="scan-status" class="scan-status" role="status">Hazır</span></div>
+        <p id="scan-diagnostics" class="hint" aria-live="polite"></p>
         <p class="hint scan-hint">Meta Ad Library sonuçlarını aç, ardından taramayı başlat.</p>
       </section>
     <section id="history" role="tabpanel" aria-labelledby="tab-history" hidden>
@@ -95,7 +96,7 @@
     </section>
       <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
     </main>
-    <footer><span class="footer-brand">Meta Reklam Botu</span><span class="footer-state"><i aria-hidden="true"></i> Yerel çalışma alanı</span><span>v0.3.0</span></footer>
+    <footer><span class="footer-brand">Meta Reklam Botu</span><span class="footer-state"><i aria-hidden="true"></i> Yerel çalışma alanı</span><span>v0.4.0</span></footer>
   </div>
 </body>
 </html>

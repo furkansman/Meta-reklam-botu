@@ -85,6 +85,10 @@ function validateResults(message, state) {
       new Set(message.ads.map((ad) => ad.id)).size !== message.ads.length) throw new Error('Geçersiz tarama verisi.');
   return { ads: message.ads, scrollCount: message.scrollCount };
 }
+function sanitizeDiscovery(value) {
+  if (!value || !Number.isInteger(value.candidates) || !Number.isInteger(value.matched)) return null;
+  return { candidates: Math.max(0, value.candidates), matched: Math.max(0, value.matched), version: String(value.version || '').slice(0, 20) };
+}
 async function handle(message, sender) {
   const state = await readState();
   const type = message?.type;
@@ -99,7 +103,7 @@ async function handle(message, sender) {
         const reasons = ['stopped', 'limit', 'visible-complete', 'no-new-ads', 'no-cards', 'page-changed', 'error'];
         await finish(state, reasons.includes(message.reason) ? message.reason : 'error', results);
       } else {
-        await chrome.storage.local.set({ ...results, scan: { ...state.scan, updatedAt: Date.now() } });
+        await chrome.storage.local.set({ ...results, scan: { ...state.scan, updatedAt: Date.now(), discovery: sanitizeDiscovery(message.discovery) } });
       }
     } catch (error) {
       // Preserve last successfully saved results if the latest batch exceeds quota.
@@ -117,6 +121,13 @@ async function handle(message, sender) {
       const settings = validateSettings(message.settings);
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!Number.isInteger(tab?.id) || !isLibrary(tab.url)) throw new Error('Önce Meta Reklam Kütüphanesi sekmesini aç.');
+      let collector;
+      try { collector = await chrome.tabs.sendMessage(tab.id, { type: 'META_SCAN_STATUS' }, { frameId: 0 }); }
+      catch {
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+        collector = await chrome.tabs.sendMessage(tab.id, { type: 'META_SCAN_STATUS' }, { frameId: 0 });
+      }
+      if (collector?.version !== '0.4.0') throw new Error('Meta sekmesinde eski tarama kodu çalışıyor. Sayfayı yenile; panelde v0.4.0 görünmelidir.');
       const scan = { running: true, stopping: false, tabId: tab.id, sessionId: crypto.randomUUID(),
         sourceUrl: tab.url, startedAt: Date.now(), updatedAt: Date.now(), reason: 'running' };
       // Save ownership before starting; queued progress cannot overtake this write.
