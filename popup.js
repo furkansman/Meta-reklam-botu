@@ -73,12 +73,12 @@ function render() {
 async function perform(button, operation) {
   button.disabled = true;
   try { await operation(); }
-  catch { feedback('Kayıt işlemi tamamlanamadı. Lütfen tekrar dene.'); }
+  catch (error) { feedback(error.message || 'İşlem tamamlanamadı. Lütfen tekrar dene.'); }
   finally { button.disabled = false; }
 }
 
 function renderScan() {
-  $('#scan-status').textContent = running ? 'Çalışıyor… (iskelet)' : 'Hazır';
+  $('#scan-status').textContent = running ? 'Çalışıyor…' : 'Hazır';
   $('#scan-status').classList.toggle('running', running);
   $('#ad-count').textContent = state.ads.length;
   $('#scroll-count').textContent = state.scrollCount;
@@ -101,24 +101,28 @@ $('#scan-form').addEventListener('submit', (event) => {
   }
   perform(event.submitter, async () => {
     const settings = { autoScroll: $('#auto-scroll').checked, speed: $('#scroll-speed').value, maxAds };
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || !/^https:\/\/www\.facebook\.com\/ads\/library\/?(?:[?#]|$)/.test(tab.url || '')) {
+      throw new Error('Önce Meta Reklam Kütüphanesi sekmesini aç.');
+    }
+    let response;
+    try { response = await chrome.tabs.sendMessage(tab.id, { type: 'META_SCAN_START', tabId: tab.id, settings }); }
+    catch { throw new Error('Sayfayı yenileyip tekrar dene. Eklenti bu sayfaya henüz bağlanamadı.'); }
+    if (!response?.ok) throw new Error(response?.error || 'Tarama başlatılamadı.');
     await chrome.storage.local.set({ settings });
     state.settings = settings;
-    running = true;
-    // Integration point: send settings to a future content script here.
-    // No artificial advertisements or scroll events are generated.
-    feedback('Kontrol oturumu başladı. Canlı scraping ve scroll bağlantısı henüz eklenmedi.');
+    await refreshScan();
+    feedback('Tarama başlatıldı. Paneli kapatsan da açık sayfada devam eder.');
   }).then(renderScan);
 });
 
 $('#stop-scan').addEventListener('click', (event) => perform(event.currentTarget, async () => {
-  running = false;
-  renderScan();
-  const history = [{ createdAt: Date.now(), adCount: state.ads.length, scrollCount: state.scrollCount,
-    settings: { ...state.settings } }, ...state.history].slice(0, 100);
-  await chrome.storage.local.set({ history });
-  state.history = history;
-  render();
-  feedback('Oturum durduruldu ve geçmişe kaydedildi.');
+  const { scan } = await chrome.storage.local.get('scan');
+  if (scan?.tabId) {
+    try { await chrome.tabs.sendMessage(scan.tabId, { type: 'META_SCAN_STOP' }); }
+    catch { await chrome.storage.local.set({ scan: { ...scan, running: false, reason: 'tab-closed' } }); }
+  }
+  feedback('Durdurma isteği gönderildi.');
 }).then(renderScan));
 
 $('#clear-results').addEventListener('click', (event) => perform(event.currentTarget, async () => {
@@ -196,8 +200,9 @@ async function init() {
   const buttons = [...document.querySelectorAll('button:not([role="tab"])')];
   buttons.forEach((button) => { button.disabled = true; });
   try {
-    const saved = await chrome.storage.local.get(['ads', 'scrollCount', 'settings', 'history', 'competitors', 'filters']);
+    const saved = await chrome.storage.local.get(['ads', 'scrollCount', 'settings', 'history', 'competitors', 'filters', 'scan']);
     state = { ...state, ...saved };
+    await refreshScan(true);
     $('#media-type').value = state.filters.mediaType;
     $('#platform').value = state.filters.platform;
     $('#auto-scroll').checked = state.settings.autoScroll;
@@ -208,4 +213,28 @@ async function init() {
     renderScan();
   } catch { feedback('Yerel veriler yüklenemedi. Eklentiyi yeniden açmayı dene.'); }
 }
+async function refreshScan(checkConnection = false) {
+  const saved = await chrome.storage.local.get(['ads', 'scrollCount', 'scan', 'history']);
+  state = { ...state, ...saved };
+  running = Boolean(saved.scan?.running);
+  if (running && checkConnection) {
+    try {
+      const status = await chrome.tabs.sendMessage(saved.scan.tabId, { type: 'META_SCAN_STATUS' });
+      running = Boolean(status?.running);
+    } catch { running = false; }
+    if (!running) await chrome.storage.local.set({ scan: { ...saved.scan, running: false, reason: 'tab-closed' } });
+  }
+  render();
+  if (!running && saved.scan?.reason) {
+    const reasons = { limit: 'Maksimum reklam sayısına ulaşıldı.', 'visible-complete': 'Görünür reklamlar toplandı.',
+      'no-new-ads': 'Yeni reklam bulunamadı. Yüklemeyi ve sayfa dilini kontrol et.', 'page-changed': 'Sayfa değiştiği için tarama durdu.',
+      error: 'Tarama sırasında hata oluştu.', 'storage-error': 'Depolama doldu; tarama durdu.', stopped: 'Tarama durduruldu.', 'tab-closed': 'Tarama sekmesi kapandı veya yenilendi.' };
+    feedback(reasons[saved.scan.reason] || '');
+  }
+}
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && ['ads', 'scrollCount', 'scan', 'history'].some((key) => key in changes)) {
+    refreshScan().catch(() => feedback('Tarama durumu okunamadı.'));
+  }
+});
 init();

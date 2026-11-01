@@ -3,9 +3,23 @@
   "name": "Meta Reklam Botu",
   "version": "0.1.0",
   "description": "Meta reklam araştırmaları için tarama, geçmiş ve rakip takip paneli.",
-  "permissions": ["storage"],
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
   "action": {
     "default_title": "Meta Reklam Botu",
     "default_popup": "popup.html"
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.facebook.com/ads/library/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
 }
