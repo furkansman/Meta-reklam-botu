@@ -1,0 +1,58 @@
+[
+  {
+    "Reklam ID": "1234567890123456",
+    "Reklam Veren": "Örnek Marka",
+    "Hook": "İlk anlamlı satır.",
+    "Başlık (Headline)": "Özel teklif",
+    "Yayın Başlangıç": "2026-05-26",
+    "Yaş (gün)": 160,
+    "Durum": "Uzun süreli (30+ gün)",
+    "Medya Türü": "Video",
+    "Medya URL": "https://example.org/ad.mp4",
+    "CTA": "Get Quote",
+    "Hedef URL": "https://example.org/offer?keep=1",
+    "Tam Metin": "İlk anlamlı satır.\nİkinci satır"
+  },
+  {
+    "Reklam ID": "1234567890123457",
+    "Reklam Veren": "Örnek Marka",
+    "Hook": "İlk anlamlı satır.",
+    "Başlık (Headline)": "Özel teklif",
+    "Yayın Başlangıç": "2026-10-15",
+    "Yaş (gün)": 18,
+    "Durum": "Orta (8-29 gün)",
+    "Medya Türü": "Görsel",
+    "Medya URL": "https://example.org/ad.mp4",
+    "CTA": "Learn More",
+    "Hedef URL": "https://example.org/offer?keep=1",
+    "Tam Metin": "İlk anlamlı satır.\nİkinci satır"
+  },
+  {
+    "Reklam ID": "1234567890123458",
+    "Reklam Veren": "Örnek Marka",
+    "Hook": "İlk anlamlı satır.",
+    "Başlık (Headline)": "Özel teklif",
+    "Yayın Başlangıç": "2026-10-28",
+    "Yaş (gün)": 5,
+    "Durum": "Yeni (2-7 gün)",
+    "Medya Türü": "Carousel",
+    "Medya URL": "https://example.org/ad.mp4",
+    "CTA": "Get Quote",
+    "Hedef URL": "https://example.org/offer?keep=1",
+    "Tam Metin": "İlk anlamlı satır.\nİkinci satır"
+  },
+  {
+    "Reklam ID": "1234567890123459",
+    "Reklam Veren": "Örnek Marka",
+    "Hook": "İlk anlamlı satır.",
+    "Başlık (Headline)": "Özel teklif",
+    "Yayın Başlangıç": "2026-11-01",
+    "Yaş (gün)": 1,
+    "Durum": "Test (0-1 gün)",
+    "Medya Türü": "Video",
+    "Medya URL": "https://example.org/ad.mp4",
+    "CTA": "Get Quote",
+    "Hedef URL": "https://example.org/offer?keep=1",
+    "Tam Metin": "İlk anlamlı satır.\nİkinci satır"
+  }
+]

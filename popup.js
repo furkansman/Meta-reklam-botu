@@ -58,7 +58,7 @@ function render() {
       button.type = 'button'; button.className = 'remove'; button.textContent = format.toUpperCase();
       button.disabled = !archive || !entry.ads.length;
       button.setAttribute('aria-label', `${new Date(entry.createdAt).toLocaleString('tr-TR')} oturumunu ${format.toUpperCase()} indir`);
-      button.addEventListener('click', () => downloadRecords(entry.ads, format, `oturum-${entry.sessionId || entry.createdAt}`));
+      button.addEventListener('click', () => downloadRecords(entry.ads, format, `oturum-${entry.sessionId || entry.createdAt}`,queryName(entry.sourceUrl)));
       actions.append(button);
     }
     const summary = document.createElement('button');
@@ -169,7 +169,7 @@ function renderScan() {
   renderDateAnalysis();
   const exported = AdData.rows(state.ads);
   const filled = (column) => `${exported.filter((row) => row[column] !== '').length}/${exported.length}`;
-  const completeness = (state.scan?.reason==='meta-exhausted'?`Meta daha fazla reklam yüklemedi (${state.ads.length.toLocaleString('tr-TR')} benzersiz reklam) · `:'')+`Başlık: ${filled('Başlık (Headline)')}, CTA: ${filled('CTA')}, Tarih: ${filled('Yayın Başlangıç')}, Medya URL: ${filled('Medya URL')}, Hedef URL: ${filled('Hedef URL')}`;
+  const completeness = (state.scan?.reason==='meta-exhausted'?`Meta daha fazla reklam yüklemedi (${state.ads.length.toLocaleString('tr-TR')} benzersiz reklam) · `:'')+`Hook: ${filled('Hook')}, Başlık: ${filled('Başlık (Headline)')}, CTA: ${filled('CTA')}, Tarih: ${filled('Yayın Başlangıç')}, Medya URL: ${filled('Medya URL')}, Hedef URL: ${filled('Hedef URL')}`;
   const discovery = state.scan?.discovery;
   const totals=liveProgress && liveProgress.sessionId===state.scan?.sessionId?liveProgress:discovery;
   $('#meta-totals').textContent=`Meta’nın bildirdiği: ${totals?.reportedTotal!=null?'~'+totals.reportedTotal:'bilinmiyor'} / Toplanan benzersiz: ${(liveProgress && liveProgress.sessionId===state.scan?.sessionId?liveProgress.ads:state.ads.length).toLocaleString('tr-TR')} · Çoklu versiyon karşılaşması: ${totals?.versionEncounters||0}`;
@@ -221,11 +221,19 @@ function exportAds(format) {
   if (!ready || busy || running) return;
   downloadRecords(filteredAds(), format, 'meta-reklamlar');
 }
-function downloadRecords(ads, format, name) {
+function queryName(value){try{const url=new URL(value);return url.searchParams.get('q')||url.searchParams.get('view_all_page_id')||'Meta Ad Library';}catch{return 'Meta Ad Library';}}
+function exportSearchName(ads) {
+  for(const value of [state.scan?.sourceUrl,...ads.map(ad=>ad.sourceUrl)]) {
+    try {const url=new URL(value);const name=url.searchParams.get('q')||url.searchParams.get('view_all_page_id');if(name)return name;}catch{}
+  }
+  return nameFromHistory(ads);
+}
+function nameFromHistory(ads){const ids=new Set(ads.map(ad=>ad.id));for(const entry of state.history){if(entry.ads?.some(ad=>ids.has(ad.id))){try{return new URL(entry.sourceUrl).searchParams.get('q')||'Meta Ad Library';}catch{}}}return 'Meta Ad Library';}
+function downloadRecords(ads, format, name, searchName = null) {
   if (!ready || !ads.length) { feedback('İndirilecek arşiv verisi bulunamadı.'); return; }
   const records = AdData.rows(ads);
   let content;
-  try { content = format === 'csv' ? AdData.csv(records) : format === 'excel' ? AdXlsx.workbook(AdData.COLUMNS,records) : JSON.stringify(records,null,2); }
+  try { content = format === 'csv' ? AdData.csv(records) : format === 'excel' ? AdXlsx.workbook(AdData.EXCEL_COLUMNS,records,{searchName:searchName || exportSearchName(ads)}) : JSON.stringify(records,null,2); }
   catch (error) { feedback(error.message); return; }
   const types = { csv:'text/csv;charset=utf-8', json:'application/json;charset=utf-8', excel:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
   const url = URL.createObjectURL(new Blob([content],{type:types[format]}));
@@ -240,7 +248,7 @@ $('#export-json').addEventListener('click', () => exportAds('json'));
 $('#export-excel').addEventListener('click', () => exportAds('excel'));
 for (const format of ['csv', 'json']) document.getElementById(`history-${format}`).addEventListener('click', () => {
   const records = state.history.flatMap((entry) => (entry.ads || []).map((ad) => ({ sessionId: entry.sessionId, sessionDate: new Date(entry.createdAt).toISOString(), ...ad })));
-  downloadRecords(records, format, 'meta-gecmis');
+  downloadRecords(records, format, 'meta-gecmis','Geçmiş arşivi');
 });
 $('#telegram-form').addEventListener('submit', (event) => {
   event.preventDefault();

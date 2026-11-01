@@ -1,0 +1,9 @@
+﻿"Reklam ID","Reklam Veren","Hook","Başlık (Headline)","Yayın Başlangıç","Yaş (gün)","Durum","Medya Türü","Medya URL","CTA","Hedef URL","Tam Metin"
+"1234567890123456","Örnek Marka","İlk anlamlı satır.","Özel teklif","2026-05-26","160","Uzun süreli (30+ gün)","Video","https://example.org/ad.mp4","Get Quote","https://example.org/offer?keep=1","İlk anlamlı satır.
+İkinci satır"
+"1234567890123457","Örnek Marka","İlk anlamlı satır.","Özel teklif","2026-10-15","18","Orta (8-29 gün)","Görsel","https://example.org/ad.mp4","Learn More","https://example.org/offer?keep=1","İlk anlamlı satır.
+İkinci satır"
+"1234567890123458","Örnek Marka","İlk anlamlı satır.","Özel teklif","2026-10-28","5","Yeni (2-7 gün)","Carousel","https://example.org/ad.mp4","Get Quote","https://example.org/offer?keep=1","İlk anlamlı satır.
+İkinci satır"
+"1234567890123459","Örnek Marka","İlk anlamlı satır.","Özel teklif","2026-11-01","1","Test (0-1 gün)","Video","https://example.org/ad.mp4","Get Quote","https://example.org/offer?keep=1","İlk anlamlı satır.
+İkinci satır"

@@ -134,28 +134,10 @@
   function extract(id, record) {
     const { element: card, header } = record;
     const rawText = textOf(card);
+    const parsedText = AdData.parseCardText(rawText,header.advertiser.name);
     const links = [...new Set([...card.querySelectorAll('a[href]')].map((node) => safeUrl(node.href)).filter(Boolean))];
     const ctaNode = callToAction(card, header.sponsor);
-    const { headline, block: linkBlock, heading: headlineNode } = linkHeadline(card, ctaNode, header.advertiser);
-    const clone = card.cloneNode(true);
-    const originals = [card, ...card.querySelectorAll('*')];
-    const copies = [clone, ...clone.querySelectorAll('*')];
-    // Extract text after the sponsored header, excluding controls and metadata.
-    const sponsorIndex = originals.indexOf(header.sponsor);
-    const remove = new Set();
-    originals.forEach((node, index) => {
-      if ((index < sponsorIndex && !node.contains(header.sponsor)) || node === header.sponsor ||
-          node === ctaNode || node === headlineNode ||
-          (headlineNode && !node.contains(headlineNode) && Boolean(headlineNode.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)) ||
-          (linkBlock?.contains(node) && /^(?:whatsapp|(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/\S*)?)$/i.test(normalized(node))) || isDetails(node) || /^(Platforms?|Platformlar|Active|Inactive|Aktif|Etkin)$/i.test(normalized(node)) ||
-          (matchesIds(node).length && ![...node.children].some((child) => matchesIds(child).length))) remove.add(copies[index]);
-    });
-    remove.forEach((node) => node.remove());
-    clone.querySelectorAll('script,style,noscript,button,[role="button"],video,img,source').forEach((node) => node.remove());
-    // Detached innerText is unreliable; preserve block boundaries explicitly.
-    clone.querySelectorAll('div,p,section,br,li').forEach((node) => { node.prepend(document.createTextNode('\n')); node.append(document.createTextNode('\n')); });
-    const text = (clone.textContent || '').split('\n').map((line) => line.trim()).filter((line) => line &&
-      !/^(?:\d{1,2}\s+[\p{L}]+\s+\d{4}.*yayınlanmaya başladı|Started running on.*)$/iu.test(line)).join('\n');
+    const { block: linkBlock } = linkHeadline(card, ctaNode, header.advertiser);
     const platformText = [...card.querySelectorAll('[aria-label],[title],[alt]')].map((node) =>
       [node.getAttribute('aria-label'),node.getAttribute('title'),node.getAttribute('alt')].filter(Boolean).join(' ')).join(' ');
     const platforms = ['facebook','instagram','messenger','audience network','whatsapp'].filter((name) => new RegExp('(?:^|[^a-z])' + name + '(?:$|[^a-z])','i').test(platformText));
@@ -171,13 +153,13 @@
     const carousel = (images.length > 1 || card.querySelectorAll('video').length > 1) && (
       [...card.querySelectorAll('[aria-roledescription],[aria-label],button,[role="button"]')].some((node) => /carousel|karusel|döngü|sonraki|next|slide|slayt/i.test((node.getAttribute('aria-roledescription') || '') + ' ' + (node.getAttribute('aria-label') || '') + ' ' + normalized(node))) ||
       [...card.querySelectorAll('div')].some((node) => node.scrollWidth > node.clientWidth + 20 && /auto|scroll/.test(getComputedStyle(node).overflowX)));
-    const cta = ctaNode ? normalized(ctaNode) : '';
+    const cta = parsedText.cta;
     const targetLinks = [...(linkBlock?.querySelectorAll('a[href]') || [])];
     if (linkBlock?.matches('a[href]')) targetLinks.unshift(linkBlock);
     if (ctaNode?.matches('a[href]')) targetLinks.unshift(ctaNode);
     const targetUrl = /whatsapp|instagram|messenger/i.test(cta) ? '' : targetLinks.map((node) => AdData.targetUrl(node.href)).find(Boolean) || '';
     return { id, libraryId: id, advertiser: header.advertiser.name, advertiserUrl: header.advertiser.url,
-      primaryText: AdData.cleanPrimary(text), text: AdData.cleanPrimary(text), headline, cta,
+      fullText:parsedText.fullText, primaryText:parsedText.fullText, text:parsedText.fullText, hook:parsedText.hook, headline:parsedText.headline, cta:parsedText.cta,
       startDate: AdData.parseDate(rawText), platforms, mediaType: carousel ? 'carousel' : card.querySelector('video') ? 'video' : 'image',
       mediaUrl: card.querySelector('video') ? videos[0] || '' : images[0] || '', targetUrl,
       libraryUrl: `https://www.facebook.com/ads/library/?id=${id}`, collectedAt: new Date().toISOString() };
