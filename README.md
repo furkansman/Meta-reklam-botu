@@ -24,7 +24,7 @@ Rakip Takip listesine marka ekleyip Reklamları aç bağlantısıyla aramasını
 
 ## Güncel sürümü yükleme
 
-Bu paket **v0.5.0** olarak sürümlenmiştir. `chrome://extensions` üzerinden doğru depo klasöründen yüklenen eklentiyi yenileyin ve açık Meta sekmesini bir kez yeniden yükleyin. Panelin altında v0.5.0 görünmelidir; görünmüyorsa Chrome başka/eski bir klasörü çalıştırıyordur. Worker, eski sayfa betiğini sürüm kontrolüyle saptar ve önceki sonuçları silmeden yenileme ister. Tarama panelindeki aday/kart sayıları güncel betiğin gerçekten hangi kapsayıcıları işlediğini gösterir.
+Bu paket **v0.6.0** olarak sürümlenmiştir. `chrome://extensions` üzerinden doğru depo klasöründen yüklenen eklentiyi yenileyin ve açık Meta sekmesini bir kez yeniden yükleyin. Panelin altında v0.6.0 görünmelidir; görünmüyorsa Chrome başka/eski bir klasörü çalıştırıyordur. Worker, eski sayfa betiğini sürüm kontrolüyle saptar ve önceki sonuçları silmeden yenileme ister. Tarama panelindeki aday/kart sayıları güncel betiğin gerçekten hangi kapsayıcıları işlediğini gösterir.
 
 Kart keşfi artık hiçbir sınıf/border seçicisine dayanmaz. `(Kütüphane Kodu|Library ID)\s*:?\s*(\d{10,})` metninin en küçük eşleşen öğesinden yukarı çıkar; aynı ID ile reklam detayları kontrolünü ve Sponsorlu/Sponsored metninin üstündeki reklamveren adını kapsayan ilk öğeyi seçer. Farklı ID içeren üst sonuç listeleri kart olarak kabul edilmez. Aynı ID bir oturumda yalnızca bir kez saklanır. Türkçe/İngilizce başlangıç tarihleri ISO gün olarak çıkarılır; platform etiketleri ve görsel/video türü de kaydedilir. Eksik tarihler uydurulmaz. Aday/kart teşhisinin yanında sayfadaki “Kütüphane Kodu” metni sayısı gösterilir. Bu kontroller sınıfsız ve rastgele sınıflı DOM örnekleriyle doğrulanmıştır; kullanıcının canlı Meta sayfası bu ortamda incelenmemiştir.
 
@@ -32,7 +32,13 @@ Kart keşfi artık hiçbir sınıf/border seçicisine dayanmaz. `(Kütüphane Ko
 
 Panel `width: 420px !important; min-width: 420px !important;` ile sabit 420 px genişlik ve 600 px yüksekliktedir; uzun sekmeler içeriden kaydırılır; üstteki tema düğmesi açık/koyu görünümü değiştirir ve tercihi yerelde saklar. Hesap sekmesi yoktur. Tarama, Geçmiş, Rakip Takip ve Filtreler sekmeleri önceki veri/Telegram işlevlerini korur.
 
-Dışa Aktar satırındaki Excel düğmesi Excel'in açabildiği gerçek SpreadsheetML çalışma kitabı (`.xml`) indirir; CSV dosyasının uzantısını değiştirmez. Tüm hücreler metin olarak kodlanır. CSV ve JSON seçenekleri de kullanılabilir.
+Tüm CSV/JSON/XLSX indirmeleri (geçmiş dahil) aynı sırada yalnızca şu 12 alanı içerir: `Reklam ID`, `Reklam Veren`, `Metin (Primary Text)`, `Başlık (Headline)`, `Yayın Başlangıç`, `Yaş (gün)`, `Medya Türü`, `Medya URL`, `CTA`, `Hedef URL`, `Platformlar`, `Reklam Linki`. Aynı ID tekrarlanmaz; ID metin olarak korunur. Ham alanlar, oturum kimliği veya tarama zamanı dışa aktarılmaz.
+
+CSV UTF-8 BOM içerir, her hücre tırnaklıdır ve hücre içi satır sonları korunur. JSON aynı Türkçe anahtarlarla düz nesne dizisidir. Excel gerçek OOXML/ZIP `.xlsx` dosyasıdır: tek `Reklamlar` sayfası, kalın/sabit başlık, okunur sütun genişlikleri, metin biçimli ID ve satır kaydırmalı ana metin içerir. XML/CSV dosyasına XLSX uzantısı verilmez. Excel'in 32.767 karakterlik hücre sınırına ulaşılırsa açık hata gösterilir; tam veri CSV/JSON ile indirilebilir. `ad-data.js` ortak şema/temizleme kurallarını, `xlsx.js` bağımlılıksız OOXML üretimini içerir.
+
+Başlık yalnızca CTA'nın üstündeki DOM başlık öğesinden alınır; metinden tahmin edilmez. Alan adı veya WHATSAPP etiketi başlık sayılmaz. Ana metinden video zamanları, tekrarlar ve alt link bloğu çıkarılır. Başlangıç tarihleri Türkçe tam/kısaltılmış ayları ve İngilizce ayları destekler; yaş tarayıcının bugünkü yerel takvim gününe göre hesaplanır. Eksik alanlar boş kalır. Video URL yalnızca erişilebilir HTTP(S) MP4 kaynağıdır; blob/MSE kaynağından MP4 uydurulmaz. Görsellerde profil/ikonlar elenir, en büyük ana kreatif seçilir; çoklu kaydırılabilir kreatif `Carousel` olarak işaretlenir. Platformlar yalnızca `aria-label`/`alt`/`title` bilgilerinden alınır. Yönlendirme URL'leri çözülür, kampanya parametreleri silinir, WhatsApp/Instagram/Messenger hedefleri boş bırakılır.
+
+Yeni taramalarda `rawText` yalnızca ayrıştırma belleğinde kullanılır ve sonuçlara/depolamaya eklenmez. Önceki sürümlerin arşivlerindeki ham alanlar dışa aktarımda elenir; DOM'dan yeniden çıkarılamayan eski başlık/CTA bilgisi tahmin edilmez. Panelde `Başlık: X/Y, CTA: X/Y, Tarih: X/Y, Medya URL: X/Y, Hedef URL: X/Y` doluluk teşhisi gösterilir. Örnek çıktı: `examples/reklamlar-ornek.csv`.
 
 Tarih Analizi, `startDate` veya kartta açıkça etiketlenmiş Türkçe/İngilizce başlangıç tarihlerini kullanır; toplama zamanını reklam başlangıcı saymaz. En eski/yeni başlangıç, ortalama yaş, 30+ günlük, son 7 günlük ve bugün başlayan reklam sayıları gösterilir. Tarihi olmayan reklamlar hesaplamaya katılmaz; kapsama sayısı panelde belirtilir. “Test” ve “Uzun süreli” kutuları yaş gruplarıdır, reklamın performansı hakkında hüküm vermez.
 
@@ -53,7 +59,10 @@ Node.js 20+ ile bağımlılıksız worker testleri:
 
 ```sh
 node tests/background.test.cjs
+node tests/export.test.cjs
 ```
+
+Örnek CSV ve XLSX yapısını ayrıca Python `openpyxl` ile doğrulamak için: `python3 tests/verify-export.py` (önce export testini çalıştırın).
 
 Tarayıcı entegrasyon testi Playwright gerektirir. Geçici bir dizinde kurarak depo bağımlılıklarını değiştirmeden çalıştırabilirsiniz:
 

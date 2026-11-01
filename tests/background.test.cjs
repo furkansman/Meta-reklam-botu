@@ -14,7 +14,7 @@ function harness(shared = {}) {
   let apiStatus = 200;
   const event = (name) => ({ addListener(fn) { events[name] = fn; } });
   let activeTab = { id: 7, url };
-  let failStart = false, failQuota = false, collectorVersion = '0.5.0';
+  let failStart = false, failQuota = false, collectorVersion = '0.6.0';
   const chrome = {
     runtime: { id: 'test', getURL: (path) => `chrome-extension://test/${path}`, onMessage: event('message'),
       onStartup: event('startup'), onInstalled: event('installed') },
@@ -159,9 +159,9 @@ test('stale collector is rejected before clearing results; discovery is sanitize
   const response = await h.send({ type: 'START_SCAN', settings });
   assert.equal(response.ok, false); assert.match(response.error, /eski tarama kodu/);
   assert.equal(h.store.ads[0].id, 'previous');
-  h.collectorVersion('0.5.0');
+  h.collectorVersion('0.6.0');
   await h.send({ type: 'START_SCAN', settings });
-  await h.progress({ discovery: { candidates: 12, matched: 1, version: '0.5.0', token: 'private' } });
+  await h.progress({ discovery: { candidates: 12, matched: 1, version: '0.6.0', token: 'private' } });
   assert.equal(h.store.scan.discovery.candidates, 12);
   assert.equal(h.store.scan.discovery.token, undefined);
 });

@@ -135,8 +135,11 @@ function renderScan() {
   $('#scan-status').classList.toggle('running', running);
   $('#start-label').textContent = running ? 'Çalışıyor…' : 'Taramayı Başlat';
   renderDateAnalysis();
+  const exported = AdData.rows(state.ads);
+  const filled = (column) => `${exported.filter((row) => row[column] !== '').length}/${exported.length}`;
+  const completeness = `Başlık: ${filled('Başlık (Headline)')}, CTA: ${filled('CTA')}, Tarih: ${filled('Yayın Başlangıç')}, Medya URL: ${filled('Medya URL')}, Hedef URL: ${filled('Hedef URL')}`;
   const discovery = state.scan?.discovery;
-  $('#scan-diagnostics').textContent = discovery ? `Sayfa betiği v${discovery.version} · ${discovery.candidates} aday / ${discovery.matched} kart · Kütüphane Kodu: ${discovery.libraryCodeTexts || 0}` : '';
+  $('#scan-diagnostics').textContent = discovery ? `Sayfa betiği v${discovery.version} · ${discovery.candidates} aday / ${discovery.matched} kart · Kütüphane Kodu: ${discovery.libraryCodeTexts || 0} · ${completeness}` : completeness;
   $('#export-summary').textContent = `${filteredAds().length} / ${state.ads.length} reklam dışa aktarılacak`;
   $('#ad-count').textContent = state.ads.length;
   $('#scroll-count').textContent = state.scrollCount;
@@ -178,49 +181,23 @@ $('#clear-results').addEventListener('click', (event) => perform(event.currentTa
   feedback('Tarama sonuçları temizlendi.');
 }).then(renderScan));
 
-function csvCell(value) {
-  let text = typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value ?? '');
-  // Prevent spreadsheet formula execution when opening exported untrusted ad text.
-  if (/^(?:\s*[=+\-@]|[\t\r\n])/.test(text)) text = "'" + text;
-  return '"' + text.replaceAll('"', '""') + '"';
-}
-
 function exportAds(format) {
   if (!ready || busy || running) return;
-  const ads = filteredAds();
-  if (!ads.length) { feedback('Seçili filtrelere uygun sonuç yok.'); return; }
-  downloadRecords(ads, format, 'meta-reklamlar');
+  downloadRecords(filteredAds(), format, 'meta-reklamlar');
 }
-
 function downloadRecords(ads, format, name) {
   if (!ready || !ads.length) { feedback('İndirilecek arşiv verisi bulunamadı.'); return; }
-  let content = JSON.stringify(ads, null, 2);
-  if (format === 'csv') {
-    const columns = [...new Set(ads.flatMap((ad) => Object.keys(ad)))];
-    content = '\uFEFF' + [columns.map(csvCell).join(','),
-      ...ads.map((ad) => columns.map((key) => csvCell(ad[key])).join(','))].join('\r\n');
-  }
-  if (format === 'excel') {
-    const columns = [...new Set(ads.flatMap((ad) => Object.keys(ad)))];
-    const xml = (value) => String(typeof value === 'object' && value !== null ? JSON.stringify(value) : value ?? '')
-      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
-    const row = (values) => '<Row>' + values.map((value) => `<Cell><Data ss:Type="String">${xml(value)}</Data></Cell>`).join('') + '</Row>';
-    // SpreadsheetML is a native Excel XML workbook; all cells are literal strings.
-    content = '<?xml version="1.0" encoding="UTF-8"?><?mso-application progid="Excel.Sheet"?>' +
-      '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Worksheet ss:Name="Reklamlar"><Table>' +
-      row(columns) + ads.map((ad) => row(columns.map((key) => ad[key]))).join('') + '</Table></Worksheet></Workbook>';
-  }
-  const types = { csv: 'text/csv;charset=utf-8', json: 'application/json;charset=utf-8', excel: 'application/xml;charset=utf-8' };
-  const blob = new Blob([content], { type: types[format] });
-  const url = URL.createObjectURL(blob);
+  const records = AdData.rows(ads);
+  let content;
+  try { content = format === 'csv' ? AdData.csv(records) : format === 'excel' ? AdXlsx.workbook(AdData.COLUMNS,records) : JSON.stringify(records,null,2); }
+  catch (error) { feedback(error.message); return; }
+  const types = { csv:'text/csv;charset=utf-8', json:'application/json;charset=utf-8', excel:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+  const url = URL.createObjectURL(new Blob([content],{type:types[format]}));
   const link = document.createElement('a');
-  link.href = url;
-  link.download = `${name}-${Date.now()}.${format === 'excel' ? 'xml' : format}`;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-  feedback(`${format.toUpperCase()} dosyası hazırlandı.`);
+  link.href = url; link.download = `${name}-${Date.now()}.${format === 'excel' ? 'xlsx' : format}`;
+  document.body.append(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url),1000);
+  feedback(`${format === 'excel' ? 'XLSX' : format.toUpperCase()} dosyası hazırlandı.`);
 }
 $('#export-csv').addEventListener('click', () => exportAds('csv'));
 $('#export-json').addEventListener('click', () => exportAds('json'));

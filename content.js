@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const VERSION = '0.5.0';
+  const VERSION = '0.6.0';
   if (globalThis.__metaAdCollector?.version === VERSION) return;
   // A previous boolean guard belongs to an older, non-disposable collector.
   if (globalThis.__metaAdCollector === true) return;
@@ -96,25 +96,41 @@
       libraryCodeTexts: (text.join(' ').match(/Kütüphane\s+Kodu/gi) || []).length, version: VERSION };
     return found;
   }
-  function startDate(raw) {
-    const months = { january:1, jan:1, february:2, feb:2, march:3, mar:3, april:4, apr:4, may:5, june:6, jun:6, july:7, jul:7, august:8, aug:8, september:9, sep:9, october:10, oct:10, november:11, nov:11, december:12, dec:12,
-      ocak:1, şubat:2, mart:3, nisan:4, mayıs:5, haziran:6, temmuz:7, ağustos:8, eylül:9, ekim:10, kasım:11, aralık:12 };
-    let match = raw.match(/(\d{1,2})\s+([\p{L}]+)\s+(\d{4})\s+(?:tarihinde\s+)?yayınlanmaya başladı/iu) ||
-      raw.match(/Started running on\s+(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/i);
-    if (!match) {
-      const us = raw.match(/Started running on\s+([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/i);
-      if (us) match = [us[0], us[2], us[1], us[3]];
+  function callToAction(card, sponsor) {
+    const candidates = [...card.querySelectorAll('button,[role="button"],a[href]')].filter((node) => {
+      const label = normalized(node);
+      return visible(node) && !isDetails(node) && label.length > 1 && label.length < 100 &&
+        Boolean(sponsor.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+        !/^(play|pause|mute|unmute|next|previous|sonraki|önceki|oynat|duraklat|see more|daha fazla gör)$/i.test(label) &&
+        (node.matches('button,[role="button"]') || /^(shop|shop now|learn more|get quote|send message|contact us|book now|sign up|apply now|download|buy now|satın al|alışveriş yap|teklif al|daha fazla bilgi al|whatsapp mesajı gönder|mesaj gönder|hemen başvur|kaydol|indir)$/i.test(label));
+    });
+    return candidates.at(-1) || null;
+  }
+  function linkHeadline(card, cta, advertiser) {
+    if (!cta) return { headline: '', block: null, heading: null };
+    const invalid = (text) => /^(?:whatsapp|instagram|facebook|messenger|https?:\/\/\S+|(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/\S*)?)$/i.test(text);
+    for (let scope = cta.parentElement; scope && card.contains(scope); scope = scope.parentElement) {
+      const previous = cta.previousElementSibling;
+      const possible = scope === card ? (previous?.matches('h1,h2,h3,h4,h5,h6,strong,b,[role="heading"]') ? [previous] : []) : [...scope.querySelectorAll('h1,h2,h3,h4,h5,h6,strong,b,[role="heading"],div,span')];
+      const headings = possible.filter((node) => {
+        const label = normalized(node);
+        return !node.contains(cta) && !cta.contains(node) && !node.contains(advertiser.node) &&
+          Boolean(node.compareDocumentPosition(cta) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+          label && label !== advertiser.name && !invalid(label) && !isSponsored(node) && !matchesIds(node).length &&
+          ![...node.children].some((child) => normalized(child) === label) &&
+          (node.matches('h1,h2,h3,h4,h5,h6,strong,b,[role="heading"]') || Number.parseInt(getComputedStyle(node).fontWeight,10) >= 600);
+      });
+      if (headings.length) return { headline: normalized(headings.at(-1)), block: scope === card ? headings.at(-1) : scope, heading: headings.at(-1) };
+      if (scope === card) break;
     }
-    if (!match) return null;
-    const month = months[match[2].toLocaleLowerCase('tr-TR')] || months[match[2].toLowerCase()];
-    const year = Number(match[3]), day = Number(match[1]);
-    const date = new Date(Date.UTC(year, month - 1, day));
-    return month && year >= 2000 && date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? date.toISOString().slice(0, 10) : null;
+    return { headline: '', block: cta.parentElement !== card ? cta.parentElement : null, heading: null };
   }
   function extract(id, record) {
     const { element: card, header } = record;
     const rawText = textOf(card);
     const links = [...new Set([...card.querySelectorAll('a[href]')].map((node) => safeUrl(node.href)).filter(Boolean))];
+    const ctaNode = callToAction(card, header.sponsor);
+    const { headline, block: linkBlock, heading: headlineNode } = linkHeadline(card, ctaNode, header.advertiser);
     const clone = card.cloneNode(true);
     const originals = [card, ...card.querySelectorAll('*')];
     const copies = [clone, ...clone.querySelectorAll('*')];
@@ -123,25 +139,42 @@
     const remove = new Set();
     originals.forEach((node, index) => {
       if ((index < sponsorIndex && !node.contains(header.sponsor)) || node === header.sponsor ||
-          isDetails(node) || /^(Platforms?|Platformlar|Active|Inactive|Aktif|Etkin)$/i.test(normalized(node)) ||
+          node === ctaNode || node === headlineNode ||
+          (headlineNode && !node.contains(headlineNode) && Boolean(headlineNode.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)) ||
+          (linkBlock?.contains(node) && /^(?:whatsapp|(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\/\S*)?)$/i.test(normalized(node))) || isDetails(node) || /^(Platforms?|Platformlar|Active|Inactive|Aktif|Etkin)$/i.test(normalized(node)) ||
           (matchesIds(node).length && ![...node.children].some((child) => matchesIds(child).length))) remove.add(copies[index]);
     });
     remove.forEach((node) => node.remove());
-    clone.querySelectorAll('script,style,noscript,button,[role="button"]').forEach((node) => node.remove());
+    clone.querySelectorAll('script,style,noscript,button,[role="button"],video,img,source').forEach((node) => node.remove());
     // Detached innerText is unreliable; preserve block boundaries explicitly.
-    clone.querySelectorAll('div,p,section,br,li').forEach((node) => node.append(document.createTextNode('\n')));
+    clone.querySelectorAll('div,p,section,br,li').forEach((node) => { node.prepend(document.createTextNode('\n')); node.append(document.createTextNode('\n')); });
     const text = (clone.textContent || '').split('\n').map((line) => line.trim()).filter((line) => line &&
       !/^(?:\d{1,2}\s+[\p{L}]+\s+\d{4}.*yayınlanmaya başladı|Started running on.*)$/iu.test(line)).join('\n');
-    const platformText = [...card.querySelectorAll('[aria-label],[title]')].map((node) => node.getAttribute('aria-label') || node.getAttribute('title')).join(' ') + ' ' + rawText;
-    const platforms = ['facebook','instagram','messenger','audience network','threads'].filter((name) => new RegExp('(?:^|[^a-z])' + name + '(?:$|[^a-z])', 'i').test(platformText));
-    return { id, libraryId: id, identitySource: 'library-id', advertiser: header.advertiser.name,
-      advertiserUrl: header.advertiser.url, text, rawText, startDate: startDate(rawText), platforms,
-      mediaType: card.querySelector('video') ? 'video' : card.querySelector('img') ? 'image' : 'text',
-      libraryUrl: `https://www.facebook.com/ads/library/?id=${id}`, links,
-      destinationUrls: links.filter((href) => { const host = new URL(href).hostname; return host !== 'facebook.com' && !host.endsWith('.facebook.com'); }),
-      images: [...new Set([...card.querySelectorAll('img')].map((node) => safeUrl(node.currentSrc || node.src)).filter(Boolean))],
-      videos: [...new Set([...card.querySelectorAll('video,video source')].map((node) => safeUrl(node.currentSrc || node.src)).filter(Boolean))],
-      sourceUrl: location.href, collectedAt: new Date().toISOString() };
+    const platformText = [...card.querySelectorAll('[aria-label],[title],[alt]')].map((node) =>
+      [node.getAttribute('aria-label'),node.getAttribute('title'),node.getAttribute('alt')].filter(Boolean).join(' ')).join(' ');
+    const platforms = ['facebook','instagram','messenger','audience network','whatsapp'].filter((name) => new RegExp('(?:^|[^a-z])' + name + '(?:$|[^a-z])','i').test(platformText));
+    const creativeImages = [...card.querySelectorAll('img')].filter((img) => {
+      const url = img.currentSrc || img.src;
+      return Boolean(header.sponsor.compareDocumentPosition(img) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+        !/s(?:40|60)x(?:40|60)|avatar|profile|profil/i.test(url + ' ' + (img.getAttribute('alt') || '') + ' ' + (img.getAttribute('aria-label') || '')) &&
+        !/^(facebook|instagram|messenger|whatsapp|audience network)$/i.test(img.getAttribute('alt') || '') &&
+        !(img.naturalWidth > 0 && img.naturalWidth <= 80 && img.naturalHeight <= 80);
+    }).sort((a,b) => Math.max(b.naturalWidth*b.naturalHeight,b.width*b.height)-Math.max(a.naturalWidth*a.naturalHeight,a.width*a.height));
+    const images = creativeImages.map((img) => safeUrl(img.currentSrc || img.src)).filter(Boolean);
+    const videos = [...new Set([...card.querySelectorAll('video,video source')].flatMap((video) => [video.currentSrc,video.src]).filter((url) => /^https?:/i.test(url || '') && /\.mp4(?:[?#]|$)/i.test(url)))];
+    const carousel = (images.length > 1 || card.querySelectorAll('video').length > 1) && (
+      [...card.querySelectorAll('[aria-roledescription],[aria-label],button,[role="button"]')].some((node) => /carousel|karusel|döngü|sonraki|next|slide|slayt/i.test((node.getAttribute('aria-roledescription') || '') + ' ' + (node.getAttribute('aria-label') || '') + ' ' + normalized(node))) ||
+      [...card.querySelectorAll('div')].some((node) => node.scrollWidth > node.clientWidth + 20 && /auto|scroll/.test(getComputedStyle(node).overflowX)));
+    const cta = ctaNode ? normalized(ctaNode) : '';
+    const targetLinks = [...(linkBlock?.querySelectorAll('a[href]') || [])];
+    if (linkBlock?.matches('a[href]')) targetLinks.unshift(linkBlock);
+    if (ctaNode?.matches('a[href]')) targetLinks.unshift(ctaNode);
+    const targetUrl = /whatsapp|instagram|messenger/i.test(cta) ? '' : targetLinks.map((node) => AdData.targetUrl(node.href)).find(Boolean) || '';
+    return { id, libraryId: id, advertiser: header.advertiser.name, advertiserUrl: header.advertiser.url,
+      primaryText: AdData.cleanPrimary(text), text: AdData.cleanPrimary(text), headline, cta,
+      startDate: AdData.parseDate(rawText), platforms, mediaType: carousel ? 'carousel' : card.querySelector('video') ? 'video' : 'image',
+      mediaUrl: card.querySelector('video') ? videos[0] || '' : images[0] || '', targetUrl,
+      libraryUrl: `https://www.facebook.com/ads/library/?id=${id}`, collectedAt: new Date().toISOString() };
   }
 
   async function report(current, finished, reason) {

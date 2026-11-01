@@ -124,10 +124,10 @@ async function handle(message, sender) {
       let collector;
       try { collector = await chrome.tabs.sendMessage(tab.id, { type: 'META_SCAN_STATUS' }, { frameId: 0 }); }
       catch {
-        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['ad-data.js','content.js'] });
         collector = await chrome.tabs.sendMessage(tab.id, { type: 'META_SCAN_STATUS' }, { frameId: 0 });
       }
-      if (collector?.version !== '0.5.0') throw new Error('Meta sekmesinde eski tarama kodu çalışıyor. Sayfayı yenile; panelde v0.5.0 görünmelidir.');
+      if (collector?.version !== '0.6.0') throw new Error('Meta sekmesinde eski tarama kodu çalışıyor. Sayfayı yenile; panelde v0.6.0 görünmelidir.');
       const scan = { running: true, stopping: false, tabId: tab.id, sessionId: crypto.randomUUID(),
         sourceUrl: tab.url, startedAt: Date.now(), updatedAt: Date.now(), reason: 'running' };
       // Save ownership before starting; queued progress cannot overtake this write.
@@ -137,7 +137,7 @@ async function handle(message, sender) {
         let response;
         try { response = await chrome.tabs.sendMessage(tab.id, startMessage, { frameId: 0 }); }
         catch {
-          await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+          await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['ad-data.js','content.js'] });
           response = await chrome.tabs.sendMessage(tab.id, startMessage, { frameId: 0 });
         }
         if (!response?.ok) throw new Error(response?.error || 'Tarama başlatılamadı.');
