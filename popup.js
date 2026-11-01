@@ -133,6 +133,8 @@ function filteredAds() {
 function renderScan() {
   $('#scan-status').textContent = !ready ? 'Yükleniyor…' : state.scan?.stopping ? 'Durduruluyor…' : running ? 'Çalışıyor…' : 'Hazır';
   $('#scan-status').classList.toggle('running', running);
+  $('#start-label').textContent = running ? 'Çalışıyor…' : 'Taramayı Başlat';
+  renderDateAnalysis();
   $('#export-summary').textContent = `${filteredAds().length} / ${state.ads.length} reklam dışa aktarılacak`;
   $('#ad-count').textContent = state.ads.length;
   $('#scroll-count').textContent = state.scrollCount;
@@ -143,6 +145,7 @@ function renderScan() {
   $('#max-ads').disabled = !ready || busy || running;
   $('#clear-results').disabled = !ready || busy || running;
   $('#export-csv').disabled = !ready || busy || running || filteredAds().length === 0;
+  $('#export-excel').disabled = !ready || busy || running || filteredAds().length === 0;
   $('#export-json').disabled = !ready || busy || running || filteredAds().length === 0;
 }
 
@@ -195,11 +198,22 @@ function downloadRecords(ads, format, name) {
     content = '\uFEFF' + [columns.map(csvCell).join(','),
       ...ads.map((ad) => columns.map((key) => csvCell(ad[key])).join(','))].join('\r\n');
   }
-  const blob = new Blob([content], { type: format === 'csv' ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8' });
+  if (format === 'excel') {
+    const columns = [...new Set(ads.flatMap((ad) => Object.keys(ad)))];
+    const xml = (value) => String(typeof value === 'object' && value !== null ? JSON.stringify(value) : value ?? '')
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
+    const row = (values) => '<Row>' + values.map((value) => `<Cell><Data ss:Type="String">${xml(value)}</Data></Cell>`).join('') + '</Row>';
+    // SpreadsheetML is a native Excel XML workbook; all cells are literal strings.
+    content = '<?xml version="1.0" encoding="UTF-8"?><?mso-application progid="Excel.Sheet"?>' +
+      '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Worksheet ss:Name="Reklamlar"><Table>' +
+      row(columns) + ads.map((ad) => row(columns.map((key) => ad[key]))).join('') + '</Table></Worksheet></Workbook>';
+  }
+  const types = { csv: 'text/csv;charset=utf-8', json: 'application/json;charset=utf-8', excel: 'application/xml;charset=utf-8' };
+  const blob = new Blob([content], { type: types[format] });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `${name}-${Date.now()}.${format}`;
+  link.download = `${name}-${Date.now()}.${format === 'excel' ? 'xml' : format}`;
   document.body.append(link);
   link.click();
   link.remove();
@@ -208,6 +222,7 @@ function downloadRecords(ads, format, name) {
 }
 $('#export-csv').addEventListener('click', () => exportAds('csv'));
 $('#export-json').addEventListener('click', () => exportAds('json'));
+$('#export-excel').addEventListener('click', () => exportAds('excel'));
 for (const format of ['csv', 'json']) document.getElementById(`history-${format}`).addEventListener('click', () => {
   const records = state.history.flatMap((entry) => (entry.ads || []).map((ad) => ({ sessionId: entry.sessionId, sessionDate: new Date(entry.createdAt).toISOString(), ...ad })));
   downloadRecords(records, format, 'meta-gecmis');
@@ -293,6 +308,8 @@ async function init() {
   renderScan();
   try {
     await refreshState(true);
+    const { uiTheme } = await chrome.storage.local.get('uiTheme');
+    applyTheme(uiTheme === 'dark' ? 'dark' : 'light');
     populateTelegram();
     $('#media-type').value = state.filters.mediaType;
     $('#platform').value = state.filters.platform;
@@ -309,4 +326,48 @@ chrome.storage.onChanged.addListener((changes, area) => {
     refreshState().catch(() => feedback('Tarama durumu okunamadı.'));
   }
 });
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  $('#theme-toggle').setAttribute('aria-pressed', String(theme === 'dark'));
+  $('#theme-toggle').setAttribute('aria-label', theme === 'dark' ? 'Açık temayı aç' : 'Koyu temayı aç');
+}
+$('#theme-toggle').addEventListener('click', async () => {
+  const theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  applyTheme(theme);
+  try { await chrome.storage.local.set({ uiTheme: theme }); }
+  catch { feedback('Tema tercihi kaydedilemedi.'); }
+});
+
+function adStartDate(ad) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(ad.startDate || '')) return validDate(...ad.startDate.split('-').map(Number));
+  const months = { january:1, february:2, march:3, april:4, may:5, june:6, july:7, august:8, september:9, october:10, november:11, december:12,
+    ocak:1, şubat:2, mart:3, nisan:4, mayıs:5, haziran:6, temmuz:7, ağustos:8, eylül:9, ekim:10, kasım:11, aralık:12 };
+  // Only labelled ad start dates count; collection dates are not ad ages.
+  const raw = ad.rawText || '';
+  const match = raw.match(/started running(?: on)?\s+(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/i) ||
+    raw.match(/(\d{1,2})\s+([A-Za-zÇĞİÖŞÜçğıöşü]+)\s+(\d{4})\s+(?:tarihinde )?yayınlanmaya başladı/i);
+  if (!match) return null;
+  const month = months[match[2].toLocaleLowerCase('tr-TR')] || months[match[2].toLowerCase()];
+  return month ? validDate(Number(match[3]), month, Number(match[1])) : null;
+}
+function validDate(year, month, day) {
+  const value = new Date(Date.UTC(year, month - 1, day));
+  return year >= 2000 && value.getUTCFullYear() === year && value.getUTCMonth() === month - 1 && value.getUTCDate() === day && value.getTime() <= Date.now() ? value : null;
+}
+function renderDateAnalysis() {
+  const now = new Date();
+  const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const dates = state.ads.map(adStartDate).filter(Boolean).sort((a, b) => a - b);
+  const ages = dates.map((date) => Math.max(0, Math.floor((today - date.getTime()) / 86400000)));
+  const format = (date) => date.toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+  $('#oldest-date').textContent = dates.length ? format(dates[0]) : '—';
+  $('#newest-date').textContent = dates.length ? format(dates[dates.length - 1]) : '—';
+  $('#oldest-age').textContent = dates.length ? `${ages[0]} gün` : 'Tarih yok';
+  $('#newest-age').textContent = dates.length ? `${ages[ages.length - 1]} gün` : 'Tarih yok';
+  $('#average-age').textContent = dates.length ? Math.round(ages.reduce((sum, age) => sum + age, 0) / dates.length) : '—';
+  $('#long-running').textContent = ages.filter((age) => age >= 30).length;
+  $('#new-week').textContent = ages.filter((age) => age < 7).length;
+  $('#new-day').textContent = ages.filter((age) => age < 1).length;
+  $('#dated-summary').textContent = `${dates.length} / ${state.ads.length} reklamda tarih`;
+}
 init();

@@ -3,42 +3,61 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Meta Reklam Botu</title>
+  <title>Meta Reklam Kütüphanesi Botu</title>
   <link rel="stylesheet" href="popup.css">
   <script src="popup.js" defer></script>
 </head>
 <body>
-  <header class="header">
-    <div class="brand-icon" aria-hidden="true">M</div>
-    <div><h1>Meta Reklam Botu</h1><p>Reklam araştırma asistanın</p></div>
-    <span class="badge">v0.3</span>
-  </header>
-  <nav class="tabs" role="tablist" aria-label="Ana menü">
-    <button id="tab-scan" class="tab active" role="tab" aria-selected="true" aria-controls="scan" tabindex="0">Tarama</button>
-    <button id="tab-history" class="tab" role="tab" aria-selected="false" aria-controls="history" tabindex="-1">Geçmiş</button>
-    <button id="tab-competitors" class="tab" role="tab" aria-selected="false" aria-controls="competitors" tabindex="-1">Rakip Takip</button>
-    <button id="tab-filters" class="tab" role="tab" aria-selected="false" aria-controls="filters" tabindex="-1">Filtreler</button>
-  </nav>
-  <main>
-    <section id="scan" role="tabpanel" aria-labelledby="tab-scan">
-      <div class="section-heading"><div><h2>Tarama paneli</h2><p>Meta Reklam Kütüphanesi çalışma alanı</p></div><span id="scan-status" class="scan-status" role="status">Hazır</span></div>
-      <div class="counter-grid">
-        <div class="counter"><span>Reklam Sayısı</span><strong id="ad-count">0</strong></div>
-        <div class="counter"><span>Scroll Sayısı</span><strong id="scroll-count">0</strong></div>
+  <div class="popup-container">
+    <header class="header">
+      <div class="brand-row">
+        <span class="brand-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></svg></span>
+        <h1>Meta Reklam Kütüphanesi Botu</h1>
+        <button id="theme-toggle" class="theme-button" type="button" aria-label="Koyu temayı aç" aria-pressed="false" title="Temayı değiştir"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 1v3m0 16v3M1 12h3m16 0h3M4 4l2 2m12 12 2 2M4 20l2-2M18 6l2-2"/></svg></button>
       </div>
-      <form id="scan-form" class="card">
-        <div class="form-grid scan-actions">
-          <button id="start-scan" class="primary" type="submit">Scraping Başlat</button>
-          <button id="stop-scan" class="secondary" type="button" disabled>Durdur</button>
+      <nav class="tabs" role="tablist" aria-label="Ana menü">
+        <button id="tab-scan" class="tab active" role="tab" aria-selected="true" aria-controls="scan" tabindex="0">Tarama</button>
+        <button id="tab-history" class="tab" role="tab" aria-selected="false" aria-controls="history" tabindex="-1">Geçmiş</button>
+        <button id="tab-competitors" class="tab" role="tab" aria-selected="false" aria-controls="competitors" tabindex="-1">Rakip Takip</button>
+        <button id="tab-filters" class="tab" role="tab" aria-selected="false" aria-controls="filters" tabindex="-1">Filtreler</button>
+      </nav>
+    </header>
+    <main>
+      <section id="scan" role="tabpanel" aria-labelledby="tab-scan">
+        <form id="scan-form" class="scan-controls">
+          <div class="scan-actions form-grid">
+            <button id="start-scan" class="primary" type="submit"><svg class="button-icon" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true"><path d="m3 1 8 5-8 5Z"/></svg><span id="start-label">Taramayı Başlat</span></button>
+            <button id="stop-scan" class="secondary stop-button" type="button" disabled><span aria-hidden="true">■</span> Durdur</button>
+          </div>
+          <div class="option-row box">
+            <label class="toggle" for="auto-scroll"><input id="auto-scroll" type="checkbox" checked> Otomatik Scroll</label>
+            <div class="speed-control"><label for="scroll-speed">Hız:</label><select id="scroll-speed"><option value="slow">Yavaş</option><option value="medium" selected>Orta</option><option value="fast">Hızlı</option></select></div>
+          </div>
+          <div class="maximum-row box"><label for="max-ads">Maksimum Reklam:</label><input id="max-ads" type="number" min="1" max="10000" step="1" value="100" required></div>
+        </form>
+        <div class="export-heading"><h2>DIŞA AKTAR</h2><span id="export-summary">0 / 0 reklam</span></div>
+        <div class="export-actions">
+          <button id="export-csv" class="secondary" type="button" disabled><span aria-hidden="true">⇩</span> CSV</button>
+          <button id="export-json" class="secondary" type="button" disabled><span aria-hidden="true">⇩</span> JSON</button>
+          <button id="export-excel" class="secondary" type="button" title="Excel XML çalışma kitabı indir" disabled><span aria-hidden="true">⇩</span> Excel</button>
+          <button id="clear-results" class="secondary clear-button" type="button"><span aria-hidden="true">⌫</span> Temizle</button>
         </div>
-        <div class="option-row"><label class="toggle" for="auto-scroll"><input id="auto-scroll" type="checkbox" checked> Otomatik Scroll</label><select id="scroll-speed" aria-label="Scroll hızı"><option value="slow">Yavaş</option><option value="medium" selected>Orta</option><option value="fast">Hızlı</option></select></div>
-        <label for="max-ads">Maksimum Reklam</label>
-        <input id="max-ads" type="number" min="1" max="10000" step="1" value="100" required>
-        <p class="hint">Meta Reklam Kütüphanesi sekmesini açıp taramayı başlat.</p>
-      </form>
-      <div class="export-heading"><h3>Dışa Aktar</h3><span id="export-summary">Toplanan reklam verileri</span></div>
-      <div class="export-actions"><button id="export-csv" class="secondary" type="button" disabled>CSV</button><button id="export-json" class="secondary" type="button" disabled>JSON</button><button id="clear-results" class="secondary danger" type="button">Temizle</button></div>
-    </section>
+        <section class="analysis-section" aria-labelledby="analysis-title">
+          <div class="analysis-heading"><h2 id="analysis-title">TARİH ANALİZİ</h2><span id="dated-summary">Başlangıç tarihi bekleniyor</span></div>
+          <div class="date-grid box">
+            <div><span class="stat-label">EN ESKİ</span><strong id="oldest-date">—</strong><small id="oldest-age">Tarih yok</small></div>
+            <div><span class="stat-label">EN YENİ</span><strong id="newest-date">—</strong><small id="newest-age">Tarih yok</small></div>
+            <div><span class="stat-label">ORT. YAŞ</span><strong id="average-age">—</strong><small>gün</small></div>
+          </div>
+          <div class="age-grid">
+            <div class="box metric metric-green"><strong id="long-running">0</strong><span>Uzun süreli <small>(30+ gün)</small></span></div>
+            <div class="box metric metric-blue"><strong id="new-week">0</strong><span>Yeni <small>(7 gün)</small></span></div>
+            <div class="box metric metric-yellow"><strong id="new-day">0</strong><span>Test <small>(1 gün)</small></span></div>
+          </div>
+        </section>
+        <div class="counter-grid"><span>Reklam Sayısı <strong id="ad-count">0</strong></span><span>Scroll Sayısı <strong id="scroll-count">0</strong></span><span id="scan-status" class="scan-status" role="status">Hazır</span></div>
+        <p class="hint scan-hint">Meta Ad Library sonuçlarını aç, ardından taramayı başlat.</p>
+      </section>
     <section id="history" role="tabpanel" aria-labelledby="tab-history" hidden>
       <div class="section-heading"><div><h2>Arama geçmişi</h2><p>Kaydettiğin araştırmalara geri dön.</p></div></div>
       <div class="export-actions"><button id="history-csv" class="secondary" type="button">Tümünü CSV indir</button><button id="history-json" class="secondary" type="button">Tümünü JSON indir</button></div>
@@ -74,8 +93,9 @@
         <p class="hint">Botla önce Telegram’da /start ile konuş. Token yalnızca bu tarayıcının yerel alanında saklanır; Chrome Sync’e ve dışa aktarılan raporlara eklenmez.</p>
       </form>
     </section>
-    <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
-  </main>
-  <footer><span class="status-dot"></span> Yerel çalışma alanı <span>v0.3.0</span></footer>
+      <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
+    </main>
+    <footer><span class="footer-brand">Meta Reklam Botu</span><span class="footer-state"><i aria-hidden="true"></i> Yerel çalışma alanı</span><span>v0.3.0</span></footer>
+  </div>
 </body>
 </html>
