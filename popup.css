@@ -9,8 +9,14 @@
 
 * {
   box-sizing:border-box}
+html {
+  width: 400px;
+  min-width: 400px;
+}
 body {
-  width:420px;
+  width: 400px;
+  min-width: 400px;
+  min-height: 500px;
   margin:0;
   background:#f5f8fe;
   color:var(--ink)}
@@ -318,3 +324,17 @@ body { max-height: 600px; overflow-y: auto; }
 .feedback { background: #eaf2ff; border-radius: 8px; padding: 10px; overflow-wrap: anywhere; }
 #telegram-chat-id, #telegram-token { font-family: ui-monospace, monospace; }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+
+/* Keep grid/flex children from forcing buttons into narrow overlapping columns. */
+.header > div:not(.brand-icon), .section-heading > div { min-width: 0; }
+.brand-icon, .badge, .scan-status { flex-shrink: 0; }
+.tabs { width: 100%; }
+.tab { min-width: 0; white-space: nowrap; }
+.form-grid, .counter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.export-actions { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
+.export-actions button, .scan-actions button { min-width: 0; white-space: normal; line-height: 1.35; }
+.export-heading { gap: 10px; }
+.export-heading span { text-align: right; }
+#competitor-list li { flex-wrap: wrap; }
+#competitor-list li > span { flex: 1 1 100%; }
+.history-actions button { min-height: 32px; }

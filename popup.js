@@ -269,6 +269,7 @@ $('#filters-form').addEventListener('submit', (event) => {
 
 const REASONS = {
   limit: 'Maksimum reklam sayısına ulaşıldı.', 'visible-complete': 'Görünür reklamlar toplandı.',
+  'no-cards': 'Reklam kartı bulunamadı. Meta sayfasında sonuçların yüklenmesini bekle; giriş/çerez pencerelerini kapatıp tekrar dene.',
   'no-new-ads': 'Yeni reklam bulunamadı. Sayfa yüklemesini ve dilini kontrol et.',
   'page-changed': 'Sayfa değiştiği için tarama durdu.', error: 'Tarama sırasında hata oluştu.',
   'storage-error': 'Sonuçlar kaydedilemedi. Depolama alanını kontrol et.', stopped: 'Tarama durduruldu.',

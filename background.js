@@ -96,7 +96,7 @@ async function handle(message, sender) {
     const results = validateResults(message, state);
     try {
       if (type === 'META_SCAN_FINISHED') {
-        const reasons = ['stopped', 'limit', 'visible-complete', 'no-new-ads', 'page-changed', 'error'];
+        const reasons = ['stopped', 'limit', 'visible-complete', 'no-new-ads', 'no-cards', 'page-changed', 'error'];
         await finish(state, reasons.includes(message.reason) ? message.reason : 'error', results);
       } else {
         await chrome.storage.local.set({ ...results, scan: { ...state.scan, updatedAt: Date.now() } });
