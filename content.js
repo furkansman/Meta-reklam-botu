@@ -23,7 +23,7 @@
     } catch { return null; }
   }
 
-  const CARD_SELECTOR = 'article,[role="article"],div[style*="border" i],[data-pagelet*="AdLibrary"],[data-ad-id]';
+  const CARD_SELECTOR = 'div._7jvw,div[role="region"],article,[role="article"],div[style*="border" i],[data-pagelet*="AdLibrary"],[data-ad-id]';
   const MESSAGE_SELECTOR = '[data-ad-preview="message"],[data-ad-comet-preview="message"]';
   function cardIds(card) {
     const ids = [...textOf(card).matchAll(new RegExp(ID_LABEL.source, 'gi'))].map((match) => match[1]);
@@ -81,9 +81,9 @@
       if (ids.length !== 1) continue;
       const id = ids[0];
       for (let depth = 0; depth < 14 && card.parentElement && card.parentElement !== document.body; depth++) {
-        if (card.matches('article,[role="article"]')) break;
+        if (card.matches('article,[role="article"],div._7jvw,div[role="region"]') && card.querySelector('a[href],video,img')) break;
         const parent = card.parentElement;
-        if (parent.matches('main,[role="main"]') || cardIds(parent).some((other) => other !== id)) break;
+        if (parent.matches('main,[role="main"]') || parent.querySelectorAll('div._7jvw,article,[role="article"]').length > 1 || cardIds(parent).some((other) => other !== id)) break;
         // A border wrapping a complete message/link area is a card boundary,
         // whereas small bordered badges/buttons are not.
         if (card.matches(CARD_SELECTOR) && card.querySelector(MESSAGE_SELECTOR) && card.querySelector('a[href],video,img')) break;
@@ -105,7 +105,12 @@
         const host = new URL(url).hostname;
         return host !== 'facebook.com' && !host.endsWith('.facebook.com');
       });
-      return hasCreative && (hasMessage || (hasAdStatus && (externalLink || card.querySelector('video')) && adText(card).length >= 25));
+      // Meta's _7jvw is a card shell; a generic region/border still needs
+      // ad signals to avoid collecting navigation, dialogs, and result grids.
+      const knownShell = card.matches('div._7jvw');
+      const regionCreative = card.matches('div[role="region"]') && externalLink && Boolean(card.querySelector('video,img'));
+      return hasCreative && (hasMessage || ((knownShell || regionCreative || hasAdStatus) &&
+        (externalLink || card.querySelector('video') || knownShell) && adText(card).length >= 15));
     });
     for (const card of candidates) {
       if ([...accepted].some((existing) => card.contains(existing) || existing.contains(card))) continue;
@@ -149,6 +154,36 @@
     if (!response?.ok) throw new Error(response?.error || 'Tarama durumu kaydedilemedi.');
   }
 
+  function waitForPage(current, delay, detectCards = false) {
+    return new Promise((resolve) => {
+      let observer;
+      let debounce;
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        clearTimeout(debounce);
+        observer?.disconnect();
+        if (wake === finish) wake = null;
+        resolve();
+      };
+      const timer = setTimeout(finish, delay);
+      wake = finish;
+      if (detectCards) {
+        observer = new MutationObserver(() => {
+          if (debounce) return;
+          debounce = setTimeout(() => {
+            debounce = null;
+            if (current.stopped || location.href !== current.url || cards().size) finish();
+          }, 150);
+        });
+        observer.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['style', 'class', 'hidden', 'aria-hidden'] });
+      }
+      if (current.stopped) finish();
+    });
+  }
+
   async function run(current) {
     let idle = 0;
     let empty = 0;
@@ -157,7 +192,16 @@
       while (!current.stopped) {
         if (!onLibrary() || location.href !== current.url) { reason = 'page-changed'; break; }
         const before = current.ads.size;
-        const visibleCards = cards();
+        let visibleCards = cards();
+        if (!visibleCards.size && !current.ads.size && !current.waitedForInitial) {
+          current.waitedForInitial = true;
+          // Initial React rendering/network loading can take longer than scroll speed.
+          // Wait for actual DOM cards before deciding the result set is empty.
+          await waitForPage(current, 12000, true);
+          if (current.stopped) break;
+          if (location.href !== current.url) { reason = 'page-changed'; break; }
+          visibleCards = cards();
+        }
         empty = visibleCards.size ? 0 : empty + 1;
         for (const [id, card] of visibleCards) {
           if (current.ads.size >= current.settings.maxAds) break;
@@ -176,10 +220,7 @@
         const target = scroller && scroller !== document.body ? scroller : window;
         target.scrollBy({ top: Math.max(500, (target === window ? window.innerHeight : target.clientHeight) * 0.85), behavior: 'instant' });
         current.scrollCount++;
-        await new Promise((resolve) => {
-          const timer = setTimeout(() => { wake = null; resolve(); }, DELAYS[current.settings.speed]);
-          wake = () => { clearTimeout(timer); wake = null; resolve(); };
-        });
+        await waitForPage(current, DELAYS[current.settings.speed], !visibleCards.size);
       }
     } catch (error) {
       console.warn('Meta Reklam Botu: tarama kaydedilemedi.', error);
