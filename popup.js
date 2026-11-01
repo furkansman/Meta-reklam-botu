@@ -250,28 +250,41 @@ for (const format of ['csv', 'json']) document.getElementById(`history-${format}
   const records = state.history.flatMap((entry) => (entry.ads || []).map((ad) => ({ sessionId: entry.sessionId, sessionDate: new Date(entry.createdAt).toISOString(), ...ad })));
   downloadRecords(records, format, 'meta-gecmis','Geçmiş arşivi');
 });
-$('#telegram-form').addEventListener('submit', (event) => {
+const TOKEN_MASK='••••••••';
+function telegramStatus(message,kind='success') {
+  const line=$('#token-status');line.textContent=message;line.className=`hint token-status ${kind}`;
+}
+async function telegramAction(button,operation) {
+  if(!ready||busy)return;
+  busy=true;button.disabled=true;renderScan();
+  try {await operation();}
+  catch(error){telegramStatus(error.message||'Telegram ayarları kaydedilemedi. Tekrar dene.','error');}
+  finally{busy=false;button.disabled=false;renderScan();}
+}
+$('#telegram-token').addEventListener('focus',()=>{if($('#telegram-token').value===TOKEN_MASK)$('#telegram-token').select();});
+$('#telegram-form').addEventListener('submit',(event)=>{
   event.preventDefault();
-  perform(event.submitter, async () => {
-    await command('SAVE_TELEGRAM', { token: $('#telegram-token').value, chatId: $('#telegram-chat-id').value, enabled: $('#telegram-enabled').checked });
-    $('#telegram-token').value = '';
-    await refreshState();
-    populateTelegram();
-    feedback('Telegram ayarları kaydedildi. Test mesajıyla bağlantını kontrol edebilirsin.');
+  telegramAction(event.submitter,async()=>{
+    const value=$('#telegram-token').value;
+    telegramStatus('Kaydediliyor…','pending');
+    await command('SAVE_TELEGRAM',{token:value===TOKEN_MASK&&state.telegramStatus.tokenConfigured?'':value,chatId:$('#telegram-chat-id').value,enabled:$('#telegram-enabled').checked});
+    await refreshState();populateTelegram();
+    telegramStatus(`Kaydedildi ✓ · Token kaydedildi (son 4 hane: ••••${state.telegramStatus.tokenSuffix||''})`);
   });
 });
-$('#telegram-test').addEventListener('click', (event) => perform(event.currentTarget, async () => {
-  await command('TEST_TELEGRAM'); feedback('Telegram test mesajı gönderildi.');
+$('#telegram-test').addEventListener('click',(event)=>telegramAction(event.currentTarget,async()=>{
+  telegramStatus('Test mesajı gönderiliyor…','pending');
+  await command('TEST_TELEGRAM');telegramStatus('Test mesajı gönderildi ✓');
 }));
-$('#telegram-remove').addEventListener('click', (event) => perform(event.currentTarget, async () => {
-  await command('REMOVE_TELEGRAM'); await refreshState(); populateTelegram(); $('#telegram-token').value = ''; feedback('Telegram bilgileri silindi.');
+$('#telegram-remove').addEventListener('click',(event)=>telegramAction(event.currentTarget,async()=>{
+  await command('REMOVE_TELEGRAM');await refreshState();populateTelegram();telegramStatus('Telegram bilgileri silindi.');
 }));
 function populateTelegram() {
-  $('#telegram-enabled').checked = state.telegramStatus.enabled;
-  $('#telegram-chat-id').value = state.telegramStatus.chatId;
-  $('#token-status').textContent = state.telegramStatus.tokenConfigured ? 'Token kayıtlı. Değiştirmek için yenisini gir; boş bırakırsan korunur.' : 'Token henüz kaydedilmedi.';
+  $('#telegram-enabled').checked=state.telegramStatus.enabled;
+  $('#telegram-chat-id').value=state.telegramStatus.chatId;
+  $('#telegram-token').value=state.telegramStatus.tokenConfigured?TOKEN_MASK:'';
+  telegramStatus(state.telegramStatus.tokenConfigured?'Token kaydedildi':'Token henüz kaydedilmedi.',state.telegramStatus.tokenConfigured?'success':'pending');
 }
-
 
 $('#clear-history').addEventListener('click', (event) => perform(event.currentTarget, async () => {
   await command('CLEAR_HISTORY');

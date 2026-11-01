@@ -21,7 +21,9 @@ function enqueue(task) {
   return result;
 }
 async function readState() {
-  const saved = await chrome.storage.local.get(Object.keys(DEFAULTS));
+  const saved = await chrome.storage.local.get([...Object.keys(DEFAULTS),'telegramConfig']);
+  const config=saved.telegramConfig;delete saved.telegramConfig;
+  if(config)saved.telegramStatus={enabled:Boolean(config.enabled),tokenConfigured:Boolean(config.token),tokenSuffix:config.token?.slice(-4)||'',chatId:config.chatId||''};
   return { ...DEFAULTS, ...saved };
 }
 function isLibrary(value) {
@@ -215,14 +217,14 @@ async function handle(message, sender) {
     case 'CLEAR_HISTORY': await chrome.storage.local.set({ history: [], telegramOutbox: [] }); break;
     case 'SAVE_TELEGRAM': {
       const { telegramConfig: old = {} } = await chrome.storage.local.get('telegramConfig');
-      const token = typeof message.token === 'string' && message.token.trim() ? message.token.trim() : old.token || '';
-      const chatId = typeof message.chatId === 'string' ? message.chatId.trim() : '';
-      if (typeof message.enabled !== 'boolean' || (token && !/^\d{5,}:[A-Za-z0-9_-]{20,}$/.test(token)) ||
-          (chatId && !/^(?:-?\d{1,20}|@[A-Za-z0-9_]{5,})$/.test(chatId)) || (message.enabled && (!token || !chatId))) {
-        throw new Error('Geçerli Telegram Bot Token ve Chat ID gir.');
-      }
+      const supplied=normalizeTelegramToken(message.token);
+      const token=supplied||old.token||'';
+      const chatId=typeof message.chatId==='string'?message.chatId.trim():'';
+      if(!/^\d{6,}:[A-Za-z0-9_-]{30,}$/.test(token))throw new Error("Token biçimi hatalı, BotFather'dan kopyaladığın 1234567890:AAH... şeklindeki değeri yapıştır");
+      if(!/^-?\d+$/.test(chatId))throw new Error('Chat ID hatalı. Yalnızca rakam gir; grup için başında - olabilir.');
+      if(typeof message.enabled!=='boolean')throw new Error('Bildirim tercihi geçersiz.');
       await chrome.storage.local.set({ telegramConfig: { token, chatId, enabled: message.enabled },
-        telegramStatus: { enabled: message.enabled, tokenConfigured: Boolean(token), chatId } });
+        telegramStatus: { enabled: message.enabled, tokenConfigured: Boolean(token), tokenSuffix:token.slice(-4), chatId } });
       break;
     }
     case 'REMOVE_TELEGRAM':
@@ -230,7 +232,7 @@ async function handle(message, sender) {
       break;
     case 'TEST_TELEGRAM': {
       const { telegramConfig: config } = await chrome.storage.local.get('telegramConfig');
-      await sendTelegram(config, 'Meta Reklam Botu: Telegram bağlantısı başarılı.');
+      await sendTelegram(config, 'Test: Meta Reklam Botu bağlandı ✓');
       break;
     }
     case 'SEND_SUMMARY': {
@@ -308,6 +310,9 @@ function makeNotification(entry) {
   return { id: crypto.randomUUID(), sessionId: entry.sessionId, attempts: 0, nextAttempt: Date.now(),
     text: `Meta Reklam Botu — Tarama raporu\nReklam: ${entry.adCount}\nScroll: ${entry.scrollCount}\nDurum: ${entry.reason}\n${entry.sourceUrl || ''}`.slice(0, 4000) };
 }
+function normalizeTelegramToken(value) {
+  return String(value||'').trim().replace(/^[\s'"“”‘’`]+|[\s'"“”‘’`]+$/g,'').replace(/^bot\s*/i,'').replace(/^[\s'"“”‘’`]+|[\s'"“”‘’`]+$/g,'').replace(/\s+/g,'');
+}
 async function sendTelegram(config, text) {
   if (!config?.token || !config.chatId) throw new Error('Önce Telegram Bot Token ve Chat ID kaydet.');
   let response;
@@ -324,7 +329,8 @@ async function sendTelegram(config, text) {
   const result = await response.json().catch(() => ({}));
   if (!response.ok || !result.ok) {
     // Never include Telegram's raw response or request URL: both can reveal credentials.
-    const error = new Error(response.status === 429 ? 'Telegram hız sınırına ulaşıldı.' : 'Telegram gönderimi reddetti. Token, Chat ID ve bot erişimini kontrol et.');
+    const description=String(result.description||'').toLowerCase();
+    const error = new Error(response.status===401||description.includes('unauthorized')?'Token hatalı':description.includes('chat not found')?"Önce Telegram'da botuna /start yaz":description.includes('bot was blocked')?'Telegram botunun engelini kaldır ve /start yaz':response.status === 429 ? 'Telegram hız sınırına ulaşıldı.' : 'Telegram gönderimi reddetti. Token, Chat ID ve bot erişimini kontrol et.');
     error.retryable = response.status === 429 || response.status >= 500;
     error.retryAfter = Math.min(3600, Math.max(60, Number(result.parameters?.retry_after) || 60));
     throw error;

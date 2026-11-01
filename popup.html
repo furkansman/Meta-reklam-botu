@@ -97,10 +97,10 @@
         <label class="toggle" for="telegram-enabled"><input id="telegram-enabled" type="checkbox"> Bildirimleri etkinleştir</label>
         <label for="telegram-token">Telegram Bot Token</label>
         <input id="telegram-token" type="password" autocomplete="off" spellcheck="false" maxlength="200" placeholder="BotFather tarafından verilen token">
-        <p id="token-status" class="hint">Token henüz kaydedilmedi.</p>
         <label for="telegram-chat-id">Chat ID</label>
         <input id="telegram-chat-id" type="text" autocomplete="off" spellcheck="false" maxlength="32" placeholder="Örn. 123456789 veya -1001234567890">
         <button class="primary" type="submit">Telegram ayarlarını kaydet <span aria-hidden="true">✓</span></button>
+        <p id="token-status" class="hint token-status" role="status" aria-live="polite">Token henüz kaydedilmedi.</p>
         <div class="export-actions"><button id="telegram-test" class="secondary" type="button">Test mesajı</button><button id="telegram-remove" class="secondary danger" type="button">Bilgileri sil</button></div>
         <p class="hint">Botla önce Telegram’da /start ile konuş. Token yalnızca bu tarayıcının yerel alanında saklanır; Chrome Sync’e ve dışa aktarılan raporlara eklenmez.</p>
       </form>

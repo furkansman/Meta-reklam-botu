@@ -62,14 +62,22 @@ Medya seçimi ve hedef URL temizliği korunmuştur. Teşhis satırında Hook, Ba
 
 Tarih Analizi, `startDate` veya kartta açıkça etiketlenmiş Türkçe/İngilizce başlangıç tarihlerini kullanır; toplama zamanını reklam başlangıcı saymaz. En eski/yeni başlangıç, ortalama yaş, 30+ günlük, son 7 günlük ve bugün başlayan reklam sayıları gösterilir. Tarihi olmayan reklamlar hesaplamaya katılmaz; kapsama sayısı panelde belirtilir. “Test” ve “Uzun süreli” kutuları yaş gruplarıdır, reklamın performansı hakkında hüküm vermez.
 
+## Telegram formu doğrulaması
+
+Token kaydedilirken boşluk/satır sonları, çevresindeki tırnaklar ve isteğe bağlı `bot` öneki temizlenir; `^\d{6,}:[A-Za-z0-9_-]{30,}$` ile doğrulanır. Chat ID kuralı `^-?\d+$` şeklindedir. Geçersiz veri yerel kaydı değiştirmez. Sonuç, formdaki Kaydet düğmesinin hemen altındaki `#token-status` satırında gösterilir: hata kırmızı; yazım tamamlanınca “Kaydedildi ✓ · Token kaydedildi (son 4 hane: ••••AbCd)” yeşildir.
+
+Popup yeniden açıldığında token alanında yalnızca `••••••••` yer tutucusu vardır; gerçek token geri gönderilmez. Alanı değiştirerek yeni token yapıştırabilirsiniz; maskeli/boş bırakırsanız mevcut token korunur. “Bilgileri sil” tokenı kaldırır. Genel durum verisi yalnızca yapılandırma durumu, Chat ID ve tokenın son dört hanesini içerir.
+
+“Test mesajı” API'ye tam olarak `Test: Meta Reklam Botu bağlandı ✓` gönderir. `chat not found` için “Önce Telegram'da botuna /start yaz”, `Unauthorized` için “Token hatalı” mesajı aynı form satırında gösterilir. Ağ ve diğer API hatalarında da token veya ham API yanıtı kullanıcı mesajına/loga eklenmez. Gerçek botla bu ortamda mesaj gönderilmedi; API yanıtları testlerde taklit edildi.
+
 ## Telegram bildirimleri
 
 1. Telegram'da BotFather ile bir bot oluşturup token alın. Botunuzla önce `/start` üzerinden konuşun; grup/kanal kullanıyorsanız botun mesaj gönderebildiğinden emin olun.
-2. Filtreler sekmesinde Bot Token ve Chat ID alanlarını doldurun, bildirimleri etkinleştirip kaydedin. Sayısal kullanıcı/grup kimliği veya `@kanaladi` kabul edilir.
+2. Filtreler sekmesinde Bot Token ve Chat ID alanlarını doldurun, bildirimleri etkinleştirip kaydedin. Chat ID yalnızca rakamlardan oluşmalıdır; grup kimliğinde başta `-` bulunabilir. `@kanaladi`, `+` ve ondalık işaret kabul edilmez.
 3. **Test mesajı** düğmesiyle erişimi doğrulayın. Kaydedilmiş tokenı değiştirmeyecekseniz token alanını boş bırakın. **Bilgileri sil**, yerel ayarları ve bekleyen gönderimleri kaldırır.
 4. Tarama tamamlandığında reklam sayısı, scroll sayısı, sonuç durumu ve kaynak sayfa bağlantısı Telegram `sendMessage` API'sine HTTPS POST ile gönderilir. Geçmişteki **Telegram özeti** düğmesiyle ayrıca rapor isteyebilirsiniz. Reklam metinlerinin tamamı veya medya dosyaları Telegram'a gönderilmez.
 
-Token yalnızca Chrome'un yerel alanında tutulur; Sync'e, geçmişe, CSV/JSON çıktısına veya genel durum mesajlarına dahil edilmez. Yerel depolama şifreli bir sır kasası değildir. Content script'lerin depolama erişimi `TRUSTED_CONTEXTS` ile kapatılır. Token kullanıcı arayüzüne geri doldurulmaz ve API hatalarında adres/ham yanıt günlüklenmez.
+Token yalnızca Chrome'un yerel alanında tutulur; Sync'e, geçmişe, CSV/JSON çıktısına veya genel durum mesajlarına dahil edilmez. Yerel depolama şifreli bir sır kasası değildir. Content script'lerin depolama erişimi `TRUSTED_CONTEXTS` ile kapatılır. Token alanına gerçek token yerine maskeli yer tutucu doldurulur ve API hatalarında adres/ham yanıt günlüklenmez.
 
 Bildirim kuyruğu kalıcıdır (en fazla 50 rapor). Ağ hataları, HTTP 429 ve 5xx yanıtlarında en fazla üç gönderim girişimi yapılır; 429 bekleme süresine uyulur. HTTP 4xx kimlik/izin hataları tekrar denenmez; geçmişte durum gösterilir. Tarayıcının açık ve İnternet bağlantısının kullanılabilir olması gerekir. Telegram API idempotency anahtarı sunmadığından, gönderimden hemen sonra worker'ın kapanması veya ağ zaman aşımı nadiren yinelenen bildirim üretebilir. Gerçek bot kimlik bilgileriyle bu ortamda mesaj gönderilmedi; testler taklit API yanıtlarını kullanır.
 

@@ -12,7 +12,7 @@ function harness(shared = {}) {
   const sessionStore = shared.sessionStore || {};
   const events = {};
   const requests = [];
-  let apiStatus = 200;
+  let apiStatus = 200, apiDescription='',writeError=false;
   const event = (name) => ({ addListener(fn) { events[name] = fn; } });
   let activeTab = { id: 7, url };
   let failStart = false, failQuota = false, collectorVersion = '0.8.0';
@@ -24,7 +24,7 @@ function harness(shared = {}) {
     storage: { session: { async setAccessLevel() {}, async get(keys) { if (typeof keys === 'string') keys=[keys]; return structuredClone(Object.fromEntries(keys.filter(key=>key in sessionStore).map(key=>[key,sessionStore[key]]))); }, async set(values) { Object.assign(sessionStore,structuredClone(values)); } }, local: {
       async setAccessLevel() {},
       async get(keys) { if (typeof keys === 'string') keys = [keys]; return structuredClone(Object.fromEntries(keys.filter((key) => key in store).map((key) => [key, store[key]]))); },
-      async set(values) { if (failQuota && values.ads?.some((ad) => ad.large)) throw new Error('QUOTA'); Object.assign(store, structuredClone(values)); }
+      async set(values) { if(writeError&&values.telegramConfig)throw new Error('Yerel kayıt yazılamadı.'); if (failQuota && values.ads?.some((ad) => ad.large)) throw new Error('QUOTA'); Object.assign(store, structuredClone(values)); }
     } },
     tabs: {
       async query() { return [activeTab]; },
@@ -36,11 +36,11 @@ function harness(shared = {}) {
       }, onRemoved: event('removed'), onUpdated: event('updated')
     }
   };
-  vm.runInNewContext(source, { chrome, crypto: webcrypto, URL, console, Date, AbortSignal, fetch: async (url, options) => { requests.push({ url, options }); return { ok: apiStatus === 200, status: apiStatus, async json() { return { ok: apiStatus === 200 }; } }; } });
+  vm.runInNewContext(source, { chrome, crypto: webcrypto, URL, console, Date, AbortSignal, fetch: async (url, options) => { requests.push({ url, options }); return { ok: apiStatus === 200, status: apiStatus, async json() { return { ok: apiStatus === 200,description:apiDescription }; } }; } });
   const send = (message, sender = { id: 'test', url: 'chrome-extension://test/popup.html' }) => new Promise((resolve) => events.message(message, sender, resolve));
   const progress = (overrides = {}, senderOverrides = {}) => send({ type: 'META_SCAN_PROGRESS', sessionId: store.scan.sessionId,
     ads: [{ id: '12345', text: 'Ad' }], scrollCount: 1, ...overrides }, { id: 'test', tab: { id: 7 }, frameId: 0, url, ...senderOverrides });
-  return { store, sessions, sessionStore, events, send, progress, requests, apiStatus: (status) => { apiStatus = status; }, collectorVersion: (version) => { collectorVersion = version; }, setTab: (tab) => { activeTab = tab; }, failStart: () => { failStart = true; }, failQuota: () => { failQuota = true; } };
+  return { store, sessions, sessionStore, events, send, progress, requests, apiStatus: (status,description='') => { apiStatus = status;apiDescription=description; },writeError:()=>{writeError=true;}, collectorVersion: (version) => { collectorVersion = version; }, setTab: (tab) => { activeTab = tab; }, failStart: () => { failStart = true; }, failQuota: () => { failQuota = true; } };
 }
 test('start/progress/stop/finish, single owner and idempotent history', async () => {
   const h = harness();
@@ -110,12 +110,12 @@ test('concurrent starts serialize; competitors and filters persist', async () =>
 
 test('archive keeps scan data; telegram credential settings stay out of public state', async () => {
   const h = harness();
-  await h.send({ type: 'SAVE_TELEGRAM', enabled: true, token: '123456:TEST_TOKEN_FOR_UNIT_TESTS_ONLY', chatId: '-1001234567890' });
+  await h.send({ type: 'SAVE_TELEGRAM', enabled: true, token: '123456:TEST_TOKEN_FOR_UNIT_TESTS_ONLY_123456', chatId: '-1001234567890' });
   const response = await h.send({ type: 'GET_STATE' });
   assert.equal(response.state.telegramStatus.tokenConfigured, true);
   assert(!JSON.stringify(response).includes('TEST_TOKEN'));
   await h.send({ type: 'SAVE_TELEGRAM', enabled: true, token: '', chatId: '123456789' });
-  assert.equal(h.store.telegramConfig.token, '123456:TEST_TOKEN_FOR_UNIT_TESTS_ONLY');
+  assert.equal(h.store.telegramConfig.token, '123456:TEST_TOKEN_FOR_UNIT_TESTS_ONLY_123456');
   await h.send({ type: 'START_SCAN', settings }); await h.progress();
   await h.progress({ type: 'META_SCAN_FINISHED', reason: 'limit' });
   for (let attempt = 0; attempt < 20 && h.store.history[0].telegram !== 'sent'; attempt++) await new Promise(setImmediate);
@@ -132,7 +132,7 @@ test('archive keeps scan data; telegram credential settings stay out of public s
 test('telegram API failures are reported safely and transient failures retain durable jobs', async () => {
   for (const status of [401, 429, 500]) {
     const h = harness(); h.apiStatus(status);
-    await h.send({ type: 'SAVE_TELEGRAM', enabled: true, token: '123456:TEST_TOKEN_FOR_UNIT_TESTS_ONLY', chatId: '123456789' });
+    await h.send({ type: 'SAVE_TELEGRAM', enabled: true, token: '123456:TEST_TOKEN_FOR_UNIT_TESTS_ONLY_123456', chatId: '123456789' });
     const result = await h.send({ type: 'TEST_TELEGRAM' });
     assert.equal(result.ok, false); assert(!result.error.includes('TEST_TOKEN'));
     await h.send({ type: 'START_SCAN', settings }); await h.progress(); await h.progress({ type: 'META_SCAN_FINISHED', reason: 'stopped' });
@@ -188,4 +188,21 @@ test('uncheckpointed records survive tab loss and resume includes persisted IDs'
  assert.equal(h.store.ads.length,0);h.events.removed(7);await h.send({type:'GET_STATE'});
  assert.equal(h.store.ads[0].id,'123456789012');
  assert.equal((await h.send({type:'RESUME_SCAN',settings})).ok,true);assert.equal(h.store.ads.length,1);assert.equal(h.sessionStore.scanProgress.ads,1);
+});
+
+test('Telegram token cleanup, strict validation, suffix masking and write errors',async()=>{
+ const h=harness(),token='1234567890:AAH_abcdefghijklmnopqrstuvwxyz123456';
+ assert.equal((await h.send({type:'SAVE_TELEGRAM',token:' \"bot'+token+'\"\n ',chatId:' -10012345 ',enabled:true})).ok,true);
+ assert.equal(h.store.telegramConfig.token,token);assert.equal(h.store.telegramConfig.chatId,'-10012345');
+ const publicState=await h.send({type:'GET_STATE'});assert.equal(publicState.state.telegramStatus.tokenSuffix,'3456');assert(!JSON.stringify(publicState).includes(token));
+ assert.match((await h.send({type:'SAVE_TELEGRAM',token:'12345:abc',chatId:'1',enabled:true})).error,/Token biçimi hatalı/);
+ for(const chatId of ['@channel','+123','1.23','abc','-'])assert.match((await h.send({type:'SAVE_TELEGRAM',token:'',chatId,enabled:true})).error,/Chat ID hatalı/);
+ h.writeError();assert.equal((await h.send({type:'SAVE_TELEGRAM',token:'',chatId:'123',enabled:true})).ok,false);
+});
+test('Telegram test payload and Turkish API errors do not expose credentials',async()=>{
+ const h=harness(),token='1234567890:AAH_abcdefghijklmnopqrstuvwxyz123456';
+ await h.send({type:'SAVE_TELEGRAM',token,chatId:'123456789',enabled:true});
+ await h.send({type:'TEST_TELEGRAM'});assert.equal(JSON.parse(h.requests[0].options.body).text,'Test: Meta Reklam Botu bağlandı ✓');
+ h.apiStatus(400,'Bad Request: chat not found');assert.equal((await h.send({type:'TEST_TELEGRAM'})).error,"Önce Telegram'da botuna /start yaz");
+ h.apiStatus(401,'Unauthorized');assert.equal((await h.send({type:'TEST_TELEGRAM'})).error,'Token hatalı');
 });

@@ -157,3 +157,10 @@ footer { flex-shrink: 0; display: flex; justify-content: space-between; align-it
 .live-status-line { flex-wrap: wrap; }
 #scan-status { min-width: 0; overflow-wrap: anywhere; }
 #meta-totals { margin: 4px 0 10px; }
+
+#token-status { margin: 10px 0; overflow-wrap: anywhere; font-size: 11px; }
+#token-status.success { color: #23733b; }
+#token-status.error { color: #c43140; font-weight: 600; }
+#token-status.pending { color: var(--muted); }
+:root[data-theme="dark"] #token-status.success { color: #8bdfa1; }
+:root[data-theme="dark"] #token-status.error { color: #ff929e; }
