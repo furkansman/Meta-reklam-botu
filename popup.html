@@ -21,18 +21,23 @@
   </nav>
   <main>
     <section id="scan" role="tabpanel" aria-labelledby="tab-scan">
-      <div class="section-heading"><div><h2>Yeni bir keşfe başla</h2><p>Bir marka veya anahtar kelime ile araştır.</p></div><span class="step">01</span></div>
+      <div class="section-heading"><div><h2>Tarama paneli</h2><p>Meta Reklam Kütüphanesi çalışma alanı</p></div><span id="scan-status" class="scan-status" role="status">Hazır</span></div>
+      <div class="counter-grid">
+        <div class="counter"><span>Reklam Sayısı</span><strong id="ad-count">0</strong></div>
+        <div class="counter"><span>Scroll Sayısı</span><strong id="scroll-count">0</strong></div>
+      </div>
       <form id="scan-form" class="card">
-        <label for="query">Marka veya anahtar kelime</label>
-        <input id="query" name="query" placeholder="Örn. spor giyim, marka adı…" required maxlength="160">
-        <div class="form-grid">
-          <div><label for="country">Ülke</label><select id="country"><option value="TR">Türkiye</option><option value="ALL">Tüm ülkeler</option><option value="US">ABD</option></select></div>
-          <div><label for="ad-status">Reklam durumu</label><select id="ad-status"><option value="active">Aktif reklamlar</option><option value="all">Tüm reklamlar</option><option value="inactive">Pasif reklamlar</option></select></div>
+        <div class="form-grid scan-actions">
+          <button id="start-scan" class="primary" type="submit">Scraping Başlat</button>
+          <button id="stop-scan" class="secondary" type="button" disabled>Durdur</button>
         </div>
-        <button class="primary" type="submit">Taramayı başlat <span aria-hidden="true">→</span></button>
-        <p class="hint">Önizleme sürümü · Henüz canlı reklam taraması yapmaz.</p>
+        <div class="option-row"><label class="toggle" for="auto-scroll"><input id="auto-scroll" type="checkbox" checked> Otomatik Scroll</label><select id="scroll-speed" aria-label="Scroll hızı"><option value="slow">Yavaş</option><option value="medium" selected>Orta</option><option value="fast">Hızlı</option></select></div>
+        <label for="max-ads">Maksimum Reklam</label>
+        <input id="max-ads" type="number" min="1" max="10000" step="1" value="100" required>
+        <p class="hint">İskelet sürümü · Canlı scraping ve otomatik scroll henüz bağlı değil.</p>
       </form>
-      <div class="info"><span aria-hidden="true">✦</span><p><strong>Bir sonraki reklam fikrini keşfet.</strong><br>Aramalarını kaydet, rakiplerini tek yerden takip et.</p></div>
+      <div class="export-heading"><h3>Dışa Aktar</h3><span>Toplanan reklam verileri</span></div>
+      <div class="export-actions"><button id="export-csv" class="secondary" type="button" disabled>CSV</button><button id="export-json" class="secondary" type="button" disabled>JSON</button><button id="clear-results" class="secondary danger" type="button">Temizle</button></div>
     </section>
     <section id="history" role="tabpanel" aria-labelledby="tab-history" hidden>
       <div class="section-heading"><div><h2>Arama geçmişi</h2><p>Kaydettiğin araştırmalara geri dön.</p></div></div>
