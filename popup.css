@@ -164,3 +164,10 @@ footer { flex-shrink: 0; display: flex; justify-content: space-between; align-it
 #token-status.pending { color: var(--muted); }
 :root[data-theme="dark"] #token-status.success { color: #8bdfa1; }
 :root[data-theme="dark"] #token-status.error { color: #ff929e; }
+
+.watch-settings { margin-top: 12px; }
+.watch-settings .toggle { white-space: normal; margin: 8px 0; }
+.watch-settings button { width: 100%; margin-top: 8px; }
+#watch-error, .watch-error { color: #c43140; }
+:root[data-theme="dark"] #watch-error, :root[data-theme="dark"] .watch-error { color: #ff929e; }
+#competitor-list li > strong, #competitor-list li > small, #competitor-list details { flex: 1 1 100%; }

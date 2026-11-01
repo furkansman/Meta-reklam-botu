@@ -80,8 +80,18 @@
     </section>
     <section id="competitors" role="tabpanel" aria-labelledby="tab-competitors" hidden>
       <div class="section-heading"><div><h2>Rakiplerini takip et</h2><p>İlgilendiğin markaları listene ekle.</p></div></div>
-      <form id="competitor-form" class="card"><label for="competitor-name">Marka adı</label><input id="competitor-name" required maxlength="100" placeholder="Takip edilecek marka"><button class="primary" type="submit">Listeye ekle <span aria-hidden="true">+</span></button></form>
-      <ul id="competitor-list" class="items"></ul><p id="competitors-empty" class="empty">Takip listen henüz boş.</p><p class="hint">Markanın reklamlarını açıp tarama başlat. Son taramadaki reklamlar önceki taramayla karşılaştırılır; yeni reklam sayısı burada gösterilir.</p>
+      <form id="competitor-form" class="card"><label for="competitor-name">Marka adı</label><input id="competitor-name" required maxlength="100" placeholder="Takip edilecek marka"><label for="competitor-page">Facebook sayfa linki veya Sayfa ID (isteğe bağlı)</label><input id="competitor-page" maxlength="300" placeholder="https://www.facebook.com/marka veya 123456789"><button class="primary" type="submit">Listeye ekle <span aria-hidden="true">+</span></button></form>
+      <div class="card watch-settings">
+        <label class="toggle"><input id="watch-enabled" type="checkbox"> Otomatik günlük tarama</label>
+        <label for="watch-time">Saat (tarayıcının yerel saati)</label><input id="watch-time" type="time" value="01:00">
+        <label class="toggle"><input id="watch-unchanged" type="checkbox" checked> Yeni reklam yoksa da mesaj gönder</label>
+        <button id="watch-save" class="secondary" type="button">Tarama ayarlarını kaydet</button>
+        <button id="watch-all" class="primary" type="button">Hepsini şimdi tara</button>
+        <p id="watch-status" class="hint" role="status"></p>
+        <p id="watch-error" class="hint" role="status"></p>
+        <button id="watch-missed" class="secondary" type="button" hidden>Gece taraması çalışmadı, şimdi çalıştır</button>
+      </div>
+      <ul id="competitor-list" class="items"></ul><p id="competitors-empty" class="empty">Takip listen henüz boş.</p><p class="hint">En fazla 10 marka. Her marka için Türkiye/aktif reklamlar en fazla 300 kayıt ve 10 dakika ile taranır. Kısmi taramalarda görünmeyenler durmuş sayılmaz.</p>
     </section>
     <section id="filters" role="tabpanel" aria-labelledby="tab-filters" hidden>
       <div class="section-heading"><div><h2>Aramanı özelleştir</h2><p>Bir sonraki araştırman için tercihlerini kaydet.</p></div></div>

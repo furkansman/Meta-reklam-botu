@@ -13,7 +13,7 @@ Manifest V3 Chrome eklentisi. Meta Reklam Kütüphanesi'nin yüklenmiş reklam k
 
 Son sonuçlar her başarılı yeni taramada yenilenir. Geçmiş son 100 oturumu listeler; ayrıntılı reklam arşivleri yaklaşık 3 MB bütçeyle saklanır. Bütçeyi aşan eski kayıtlar özet olarak korunur ve arayüzde belirtilir. Geçmiş sekmesinden tek oturumu veya tüm mevcut arşivleri CSV/JSON indirebilirsiniz. Eski sürümlerden kalan yalnızca özet kayıtlar için reklam verisi sonradan üretilemez.
 
-Rakip Takip listesine marka ekleyip Reklamları aç bağlantısıyla aramasını başlatın. Tamamlanan taramanın arama terimi veya reklamveren adı listedeki markayla eşleşirse reklam sayısı ve önceki taramaya göre yeni kimlikler listelenir. Bu karşılaştırma o taramada toplanan kartları kapsar; zamanlanmış bağımsız tarama yapmaz.
+Rakip Takip artık ayrı, kalıcı bir günlük tarama kuyruğu kullanır. Manuel taramanın sonuçları ve sayaçları rakip taraması tarafından değiştirilmez. Ayrıntılar aşağıdaki Rakip Takip bölümündedir.
 
 ## Dosyalar
 
@@ -64,11 +64,22 @@ Tarih Analizi, `startDate` veya kartta açıkça etiketlenmiş Türkçe/İngiliz
 
 ## Telegram formu doğrulaması
 
-Token kaydedilirken boşluk/satır sonları, çevresindeki tırnaklar ve isteğe bağlı `bot` öneki temizlenir; `^\d{6,}:[A-Za-z0-9_-]{30,}$` ile doğrulanır. Chat ID kuralı `^-?\d+$` şeklindedir. Geçersiz veri yerel kaydı değiştirmez. Sonuç, formdaki Kaydet düğmesinin hemen altındaki `#token-status` satırında gösterilir: hata kırmızı; yazım tamamlanınca “Kaydedildi ✓ · Token kaydedildi (son 4 hane: ••••AbCd)” yeşildir.
+Gerçek token hiçbir zaman input `value` alanına geri yazılmaz. Kayıt varsa alan boş kalır; placeholder `Kayıtlı token: ••••AbCd (değiştirmek için yeni token yapıştır)` ve durum satırı son dört haneyi gösterir. Boş veya yalnızca nokta/bullet/yıldız yer tutucusu Kaydet/Test işlemlerinde `storage.local` içindeki tokenı kullanır. Yeni yapıştırılan değerde boşluk/satır sonları, tırnaklar ve `bot` öneki temizlenip `^\d{6,}:[A-Za-z0-9_-]{30,}$` doğrulanır; kayıtlı token yeniden doğrulanmaz. Chat ID `^-?\d+$` olmalıdır.
 
-Popup yeniden açıldığında token alanında yalnızca `••••••••` yer tutucusu vardır; gerçek token geri gönderilmez. Alanı değiştirerek yeni token yapıştırabilirsiniz; maskeli/boş bırakırsanız mevcut token korunur. “Bilgileri sil” tokenı kaldırır. Genel durum verisi yalnızca yapılandırma durumu, Chat ID ve tokenın son dört hanesini içerir.
+Test mesajı, yeni token/Chat ID girildiyse bunları kaydetmeden dener; aksi halde kayıtlı değerleri kullanır. İçerik `Test: Meta Reklam Botu bağlandı ✓` şeklindedir. Tüm sonuçlar form altındaki `#token-status` satırındadır: kayıtta yeşil Kaydedildi ✓, hatalarda kırmızı mesaj. 401 için BotFather'dan yeni token alınması, chat not found için bota /start yazılması, ağ hatası için ulaşılamadığı söylenir. Telegram description metni tokenlar temizlendikten sonra gösterilir; token, API URL'si veya tam hata nesnesi konsola yazılmaz. Gerçek bot kimlik bilgileri bu ortamda bulunmadığından A bölümü kontrollü API yanıtlarıyla doğrulanmıştır.
 
-“Test mesajı” API'ye tam olarak `Test: Meta Reklam Botu bağlandı ✓` gönderir. `chat not found` için “Önce Telegram'da botuna /start yaz”, `Unauthorized` için “Token hatalı” mesajı aynı form satırında gösterilir. Ağ ve diğer API hatalarında da token veya ham API yanıtı kullanıcı mesajına/loga eklenmez. Gerçek botla bu ortamda mesaj gönderilmedi; API yanıtları testlerde taklit edildi.
+## Rakip Takip ve günlük yeni reklam uyarıları
+
+- En fazla **10 marka** ekleyin; marka adını Meta'daki reklamveren adıyla eşleştirin. İsteğe bağlı sayısal Facebook Sayfa ID veya Facebook sayfa linki eklenebilir. Sayfa ID varsa arama o sayfaya kapsamlanır. Vanity link önce arka planda açılıp Meta app-link bilgisinden sayısal ID çözülür; çözülemezse başka sayfaların verisini karıştırmak yerine hata kaydedilir ve sayısal ID istenir.
+- **Hepsini şimdi tara** veya marka yanındaki **Şimdi tara** mevcut motoru `active:false` yeni sekmede çalıştırır: Türkiye, tüm reklam türleri, aktif reklamlar; marka başına en fazla 300 kayıt/10 dakika. Yalnızca adı veya sayfa kimliği/linki eşleşen kayıtlar alınır. Eşleşme yoksa eski analiz silinmez.
+- Marka bitince yalnızca servis tarafından açılan sekme kapatılır. Sıradaki marka için 30–60 saniye rastgele bekleme `chrome.alarms` ile planlanır. Kuyruk, aktif sekme/oturum ve zaman aşımı kalıcıdır; worker askıya alınsa da devam edebilir. Chrome/Meta arka plan sekmelerini kısıtlarsa tarama başarısız olarak kaydedilebilir; diğer markalara geçilir.
+- Günlük saat varsayılan **01:00**, tarayıcının yerel saatidir. Ayar değiştirilince eski günlük alarm silinir, `periodInMinutes:1440` ile yenisi kurulur. Startup/installed olaylarında alarm yeniden doğrulanır. Bilgisayar kapalıyken kaçırılan tarama için açılışta onay düğmeli bildirim ve popup içinde çalıştırma düğmesi gösterilir; kullanıcı onaylamadan kaçırılan iş başlatılmaz. Chrome alarmı gerçek zamanlı bir zamanlayıcı değildir, uyku/yoğunlukta gecikebilir.
+- İlk başarılı tarama bir baseline'dır: yeni reklam uyarısı yerine “X marka kaydedildi, değişiklikler bir sonraki taramadan itibaren takip edilecek” raporu hazırlanır. Sonraki taramalarda yeni ve görünmeyen ID'ler kıyaslanır. 300 sınırına ulaşan kısmi sonuçlarda görünmeyen kayıtlar durmuş sayılmaz; sayı tüm Meta veritabanının kesin toplamı değildir. Meta'nın yüklemediği kayıtlar için durma tahmini yapılmaz.
+- Her marka son başarılı analizini, yeni/görünmeyen sayılarını, Hook/başlangıç/medya/CTA/link dahil kayıtları saklar. Son tarama ve hatalar listede görünür; yeni Hook'lar açılır listede, **Son analizi Excel indir** ile mevcut iki sayfalı Excel biçiminde indirilebilir.
+- Bütün markalardan sonra tek mantıksal Telegram raporu hazırlanır: marka başına en fazla 5 yeni Hook ve link, fazlasının adedi, hata veren markalar ve toplam etkilenen marka sayısı. 4000 karakteri aşarsa parçalanır. **Yeni reklam yoksa da mesaj gönder** kapalıysa, değişiklik/ilk kayıt/hata olmayan tur sessiz kalır.
+- Telegram kapalıysa veya gönderim hatalıysa rakip analizi yine saklanır, Türkçe hata Rakip Takip sekmesinde gösterilir. Gönderim sırasında browser'ın kapanması nadiren aynı rapor parçasını tekrar gönderebilir (Telegram'ın idempotency anahtarı yoktur). Günlük izleme için Chrome açık ve Meta oturumu erişilebilir olmalıdır. Bildirim izni reddedilirse kaçırılmış tarama düğmesi popup'ta kalır.
+
+`competitor.js` bu kuyruğu bağımsız yönetir. `content.js` motoruna yalnızca rakip mesajlarının manuel sayaç session kaydına yazılmasını engelleyen tek satır kontrol eklendi; tarama döngüsü, Hook/CSV-XLSX şeması ve sayaç barı algoritması değiştirilmedi. Yeni `notifications` izni ve `icon.png`, kaçırılmış günlük tarama bildirimi içindir. Harici ses/yapay zekâ API'si kullanılmaz.
 
 ## Telegram bildirimleri
 
@@ -77,7 +88,7 @@ Popup yeniden açıldığında token alanında yalnızca `•••••••�
 3. **Test mesajı** düğmesiyle erişimi doğrulayın. Kaydedilmiş tokenı değiştirmeyecekseniz token alanını boş bırakın. **Bilgileri sil**, yerel ayarları ve bekleyen gönderimleri kaldırır.
 4. Tarama tamamlandığında reklam sayısı, scroll sayısı, sonuç durumu ve kaynak sayfa bağlantısı Telegram `sendMessage` API'sine HTTPS POST ile gönderilir. Geçmişteki **Telegram özeti** düğmesiyle ayrıca rapor isteyebilirsiniz. Reklam metinlerinin tamamı veya medya dosyaları Telegram'a gönderilmez.
 
-Token yalnızca Chrome'un yerel alanında tutulur; Sync'e, geçmişe, CSV/JSON çıktısına veya genel durum mesajlarına dahil edilmez. Yerel depolama şifreli bir sır kasası değildir. Content script'lerin depolama erişimi `TRUSTED_CONTEXTS` ile kapatılır. Token alanına gerçek token yerine maskeli yer tutucu doldurulur ve API hatalarında adres/ham yanıt günlüklenmez.
+Token yalnızca Chrome'un yerel alanında tutulur; Sync'e, geçmişe, CSV/JSON çıktısına veya genel durum mesajlarına dahil edilmez. Yerel depolama şifreli bir sır kasası değildir. Content script'lerin depolama erişimi `TRUSTED_CONTEXTS` ile kapatılır. Token input değeri boş tutulur; maskeli bilgi yalnızca placeholder olarak gösterilir ve API hatalarında adres/ham yanıt günlüklenmez.
 
 Bildirim kuyruğu kalıcıdır (en fazla 50 rapor). Ağ hataları, HTTP 429 ve 5xx yanıtlarında en fazla üç gönderim girişimi yapılır; 429 bekleme süresine uyulur. HTTP 4xx kimlik/izin hataları tekrar denenmez; geçmişte durum gösterilir. Tarayıcının açık ve İnternet bağlantısının kullanılabilir olması gerekir. Telegram API idempotency anahtarı sunmadığından, gönderimden hemen sonra worker'ın kapanması veya ağ zaman aşımı nadiren yinelenen bildirim üretebilir. Gerçek bot kimlik bilgileriyle bu ortamda mesaj gönderilmedi; testler taklit API yanıtlarını kullanır.
 
@@ -89,6 +100,7 @@ Node.js 20+ ile bağımlılıksız worker testleri:
 node tests/background.test.cjs
 node tests/export.test.cjs
 node tests/scan-loop.test.cjs
+node tests/competitor.test.cjs
 ```
 
 Örnek CSV ve XLSX yapısını ayrıca Python `openpyxl` ile doğrulamak için: `python3 tests/verify-export.py` (önce export testini çalıştırın).

@@ -169,7 +169,7 @@
     const response = await chrome.runtime.sendMessage({ type:'SCAN_PROGRESS', record, ads:current.ads.size,
       scrolls:current.scrollCount, status, reportedTotal:current.reportedTotal??null, versionEncounters:current.versionEncounters, recoveryRound:current.recoveryRound||0, sessionId:current.sessionId });
     if (!response?.ok) throw new Error(response?.error || 'Canlı sayaç güncellenemedi.');
-    await chrome.storage.session.set({ scanProgress:response.progress });
+    if(!response.competitor)await chrome.storage.session.set({ scanProgress:response.progress });
   }
   async function report(current, finished, reason) {
     const response = await chrome.runtime.sendMessage({ type: finished ? 'META_SCAN_FINISHED' : 'META_SCAN_PROGRESS',

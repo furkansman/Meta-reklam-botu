@@ -8,7 +8,7 @@ let ready = false;
 let liveProgress = null;
 let busy = false;
 let refreshQueue = Promise.resolve();
-let state = { telegramStatus: { enabled: false, tokenConfigured: false, chatId: '' }, ads: [], scrollCount: 0, settings: { autoScroll: true, speed: 'medium', maxAds: 100 }, history: [], competitors: [], competitorStats: {}, filters: { mediaType: 'all', platform: 'all' } };
+let state = {competitorProfiles:{},watchSettings:{enabled:false,time:'01:00',notifyUnchanged:true},watchRun:null,watchResults:{},watchReportError:'',watchSchedule:{}, telegramStatus: { enabled: false, tokenConfigured: false, chatId: '' }, ads: [], scrollCount: 0, settings: { autoScroll: true, speed: 'medium', maxAds: 100 }, history: [], competitors: [], competitorStats: {}, filters: { mediaType: 'all', platform: 'all' } };
 
 function activateTab(tab) {
   tabs.forEach((item) => {
@@ -77,33 +77,25 @@ function render() {
   $('#clear-history').hidden = state.history.length === 0;
   for (const id of ['history-csv', 'history-json']) document.getElementById(id).disabled = !ready || !state.history.some((entry) => entry.ads?.length);
   $('#competitor-list').replaceChildren();
-  state.competitors.forEach((name) => {
-    const li = document.createElement('li');
-    const label = document.createElement('span');
-    label.textContent = name;
-    const stats = state.competitorStats[name];
-    const detail = document.createElement('small');
-    detail.textContent = stats ? `${stats.count} reklam · ${stats.newCount} yeni · ${new Date(stats.updatedAt).toLocaleDateString('tr-TR')}` : 'Henüz taranmadı';
-    label.append(detail);
-    const remove = document.createElement('button');
-    remove.type = 'button';
-    remove.className = 'remove';
-    remove.textContent = 'Kaldır';
-    remove.setAttribute('aria-label', `${name} markasını kaldır`);
-    remove.addEventListener('click', () => perform(remove, async () => {
-      await command('REMOVE_COMPETITOR', { name });
-      await refreshState();
-      feedback('Marka listeden kaldırıldı.');
-    }));
-    const link = document.createElement('a');
-    link.textContent = 'Reklamları aç';
-    link.href = `https://www.facebook.com/ads/library/?active_status=all&ad_type=all&country=ALL&q=${encodeURIComponent(name)}`;
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
-    li.append(label, link, remove);
+  const watching=Boolean(state.watchRun?.running);
+  $('#watch-all').disabled=!ready||busy||watching||!state.competitors.length;
+  $('#watch-status').textContent=watching?`Rakip taraması çalışıyor · ${state.watchRun.active?.brand.name||state.watchRun.phase} · ${state.watchRun.items?.length||0}/${(state.watchRun.items?.length||0)+(state.watchRun.queue?.length||0)+(state.watchRun.active?1:0)}`:'Rakip taraması hazır';
+  $('#watch-error').textContent=state.watchReportError||'';
+  $('#watch-missed').hidden=!state.watchSchedule?.missed;
+  state.competitors.forEach(name=>{
+    const result=state.watchResults[name];const li=document.createElement('li');const title=document.createElement('strong');title.textContent=name;li.append(title);
+    const detail=document.createElement('small');detail.textContent=result?.baseline?`Son tarama: ${new Date(result.lastScan).toLocaleString('tr-TR')} · ${result.newAds?.length||0} yeni · ${result.missingIds?.length||0} durmuş olabilir · toplam ${result.total}${result.partial?' (kısmi)':''}`:'Henüz taranmadı';li.append(detail);
+    if(result?.error){const error=document.createElement('small');error.className='watch-error';error.textContent=`Taranamadı: ${result.error}`;li.append(error);}
+    const actions=document.createElement('div');actions.className='history-actions';
+    const scan=document.createElement('button');scan.type='button';scan.className='remove';scan.textContent='Şimdi tara';scan.disabled=watching;scan.addEventListener('click',()=>watchAction(()=>command('WATCH_START',{name})));actions.append(scan);
+    const link=document.createElement('a');link.textContent='Reklamları aç';link.href=state.competitorProfiles[name]?.pageId?`https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=TR&view_all_page_id=${encodeURIComponent(state.competitorProfiles[name].pageId)}`:`https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=TR&q=${encodeURIComponent(name)}`;link.target='_blank';link.rel='noopener noreferrer';actions.append(link);
+    const excel=document.createElement('button');excel.type='button';excel.className='remove';excel.textContent='Son analizi Excel indir';excel.disabled=!result?.ads?.length;excel.addEventListener('click',()=>downloadRecords(result.ads,'excel','rakip-analizi',name));actions.append(excel);
+    const remove=document.createElement('button');remove.type='button';remove.className='remove';remove.textContent='Kaldır';remove.disabled=watching;remove.addEventListener('click',()=>watchAction(()=>command('REMOVE_COMPETITOR',{name})));actions.append(remove);li.append(actions);
+    if(result?.newAds?.length){const details=document.createElement('details'),summary=document.createElement('summary');summary.textContent=`Hook’ları gör (${result.newAds.length})`;details.append(summary);for(const ad of result.newAds){const text=document.createElement('p');text.textContent=ad.hook||AdData.makeHook(ad.fullText||ad.text,ad.headline,name);details.append(text);}li.append(details);}
     $('#competitor-list').append(li);
   });
-  $('#competitors-empty').hidden = state.competitors.length > 0;
+  $('#competitors-empty').hidden=state.competitors.length>0;
+
 }
 
 async function command(type, payload = {}) {
@@ -267,14 +259,14 @@ $('#telegram-form').addEventListener('submit',(event)=>{
   telegramAction(event.submitter,async()=>{
     const value=$('#telegram-token').value;
     telegramStatus('Kaydediliyor…','pending');
-    await command('SAVE_TELEGRAM',{token:value===TOKEN_MASK&&state.telegramStatus.tokenConfigured?'':value,chatId:$('#telegram-chat-id').value,enabled:$('#telegram-enabled').checked});
+    await command('SAVE_TELEGRAM',{token:value,chatId:$('#telegram-chat-id').value,enabled:$('#telegram-enabled').checked});
     await refreshState();populateTelegram();
-    telegramStatus(`Kaydedildi ✓ · Token kaydedildi (son 4 hane: ••••${state.telegramStatus.tokenSuffix||''})`);
+    telegramStatus(`Kaydedildi ✓ · Token kaydedildi (son 4 hane: ${state.telegramStatus.tokenSuffix||''})`);
   });
 });
 $('#telegram-test').addEventListener('click',(event)=>telegramAction(event.currentTarget,async()=>{
   telegramStatus('Test mesajı gönderiliyor…','pending');
-  await command('TEST_TELEGRAM');telegramStatus('Test mesajı gönderildi ✓');
+  await command('TEST_TELEGRAM',{token:$('#telegram-token').value,chatId:$('#telegram-chat-id').value});telegramStatus('Test mesajı gönderildi ✓');
 }));
 $('#telegram-remove').addEventListener('click',(event)=>telegramAction(event.currentTarget,async()=>{
   await command('REMOVE_TELEGRAM');await refreshState();populateTelegram();telegramStatus('Telegram bilgileri silindi.');
@@ -282,8 +274,9 @@ $('#telegram-remove').addEventListener('click',(event)=>telegramAction(event.cur
 function populateTelegram() {
   $('#telegram-enabled').checked=state.telegramStatus.enabled;
   $('#telegram-chat-id').value=state.telegramStatus.chatId;
-  $('#telegram-token').value=state.telegramStatus.tokenConfigured?TOKEN_MASK:'';
-  telegramStatus(state.telegramStatus.tokenConfigured?'Token kaydedildi':'Token henüz kaydedilmedi.',state.telegramStatus.tokenConfigured?'success':'pending');
+  $('#telegram-token').value='';
+  $('#telegram-token').placeholder=state.telegramStatus.tokenConfigured?`Kayıtlı token: ••••${state.telegramStatus.tokenSuffix||''} (değiştirmek için yeni token yapıştır)`:'BotFather tokenını yapıştır';
+  telegramStatus(state.telegramStatus.tokenConfigured?`Token kaydedildi (son 4 hane: ${state.telegramStatus.tokenSuffix||''})`:'Token henüz kaydedilmedi.',state.telegramStatus.tokenConfigured?'success':'pending');
 }
 
 $('#clear-history').addEventListener('click', (event) => perform(event.currentTarget, async () => {
@@ -300,14 +293,18 @@ $('#competitor-form').addEventListener('submit', (event) => {
     feedback('Bu marka zaten listende.'); return;
   }
   perform(event.submitter, async () => {
-    await command('ADD_COMPETITOR', { name });
+    await command('ADD_COMPETITOR', { name,pageInput:$('#competitor-page').value });
     await refreshState();
-    $('#competitor-name').value = '';
+    $('#competitor-name').value = '';$('#competitor-page').value='';
     render();
     feedback('Marka takip listesine eklendi.');
   });
 });
 
+async function watchAction(operation){try{await operation();await refreshState();}catch(error){$('#watch-error').textContent=error.message;}}
+$('#watch-all').addEventListener('click',()=>watchAction(()=>command('WATCH_START')));
+$('#watch-missed').addEventListener('click',()=>watchAction(()=>command('WATCH_START')));
+$('#watch-save').addEventListener('click',()=>watchAction(()=>command('WATCH_SETTINGS',{enabled:$('#watch-enabled').checked,time:$('#watch-time').value,notifyUnchanged:$('#watch-unchanged').checked})));
 $('#filters-form').addEventListener('submit', (event) => {
   event.preventDefault();
   perform(event.submitter, async () => {
@@ -352,6 +349,7 @@ async function init() {
     const { uiTheme } = await chrome.storage.local.get('uiTheme');
     applyTheme(uiTheme === 'dark' ? 'dark' : 'light');
     populateTelegram();
+    $('#watch-enabled').checked=state.watchSettings.enabled;$('#watch-time').value=state.watchSettings.time;$('#watch-unchanged').checked=state.watchSettings.notifyUnchanged;
     $('#media-type').value = state.filters.mediaType;
     $('#platform').value = state.filters.platform;
     $('#auto-scroll').checked = state.settings.autoScroll;
@@ -364,7 +362,7 @@ async function init() {
 }
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'session' && changes.scanProgress) applyProgress(changes.scanProgress.newValue);
-  if (area === 'local' && ['ads', 'scrollCount', 'scan', 'history', 'competitors', 'competitorStats', 'filters', 'telegramStatus'].some((key) => key in changes)) {
+  if (area === 'local' && ['ads', 'scrollCount', 'scan', 'history', 'competitors', 'competitorStats', 'filters', 'telegramStatus','competitorProfiles','watchSettings','watchRun','watchResults','watchReportError','watchSchedule'].some((key) => key in changes)) {
     refreshState().catch(() => feedback('Tarama durumu okunamadı.'));
   }
 });

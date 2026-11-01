@@ -1,9 +1,11 @@
 'use strict';
+if(typeof importScripts==='function')importScripts('ad-data.js','competitor.js');
 
 const DEFAULTS = {
   ads: [], scrollCount: 0, history: [], competitors: [], competitorStats: {},
   settings: { autoScroll: true, speed: 'medium', maxAds: 100 },
   telegramStatus: { enabled: false, tokenConfigured: false, chatId: '' },
+  competitorProfiles:{},watchSettings:{enabled:false,time:'01:00',notifyUnchanged:true},watchRun:null,watchResults:{},watchReportError:'',watchSchedule:{},
   filters: { mediaType: 'all', platform: 'all' }, scan: { running: false, reason: '' }
 };
 // Content scripts never need access to bot credentials.
@@ -118,6 +120,7 @@ function sanitizeDiscovery(value) {
 async function handle(message, sender) {
   const state = await readState();
   const type = message?.type;
+  if(sender.tab&&competitorService&&await competitorService.owns(sender,message))return competitorService.content(message,sender);
   // Content scripts can only report results for their own active session.
   if (sender.tab) {
     if (!['META_SCAN_PROGRESS', 'META_SCAN_FINISHED', 'SCAN_PROGRESS'].includes(type) || sender.frameId !== 0 ||
@@ -154,6 +157,7 @@ async function handle(message, sender) {
     return { ok: true };
   }
   if (sender.url !== chrome.runtime.getURL('popup.html')) throw new Error('Bilinmeyen mesaj kaynağı.');
+  if(competitorService&&['ADD_COMPETITOR','REMOVE_COMPETITOR','WATCH_START','WATCH_SETTINGS'].includes(type))return competitorService.command(message);
   switch (type) {
     case 'GET_STATE': { const current = await reconcile(); await publishProgress(current); return { ok:true, state:current }; }
     case 'START_SCAN':
@@ -217,10 +221,11 @@ async function handle(message, sender) {
     case 'CLEAR_HISTORY': await chrome.storage.local.set({ history: [], telegramOutbox: [] }); break;
     case 'SAVE_TELEGRAM': {
       const { telegramConfig: old = {} } = await chrome.storage.local.get('telegramConfig');
-      const supplied=normalizeTelegramToken(message.token);
+      const supplied=isTokenPlaceholder(message.token)?'':normalizeTelegramToken(message.token);
       const token=supplied||old.token||'';
+      if(!token)throw new Error('Token biçimi hatalı: BotFather tokenını yapıştır.');
       const chatId=typeof message.chatId==='string'?message.chatId.trim():'';
-      if(!/^\d{6,}:[A-Za-z0-9_-]{30,}$/.test(token))throw new Error("Token biçimi hatalı, BotFather'dan kopyaladığın 1234567890:AAH... şeklindeki değeri yapıştır");
+      if(supplied&&!/^\d{6,}:[A-Za-z0-9_-]{30,}$/.test(supplied))throw new Error("Token biçimi hatalı, BotFather'dan kopyaladığın 1234567890:AAH... şeklindeki değeri yapıştır");
       if(!/^-?\d+$/.test(chatId))throw new Error('Chat ID hatalı. Yalnızca rakam gir; grup için başında - olabilir.');
       if(typeof message.enabled!=='boolean')throw new Error('Bildirim tercihi geçersiz.');
       await chrome.storage.local.set({ telegramConfig: { token, chatId, enabled: message.enabled },
@@ -231,7 +236,11 @@ async function handle(message, sender) {
       await chrome.storage.local.set({ telegramConfig: {}, telegramStatus: DEFAULTS.telegramStatus, telegramOutbox: [] });
       break;
     case 'TEST_TELEGRAM': {
-      const { telegramConfig: config } = await chrome.storage.local.get('telegramConfig');
+      const { telegramConfig: saved = {} } = await chrome.storage.local.get('telegramConfig');
+      const supplied=isTokenPlaceholder(message.token)?'':normalizeTelegramToken(message.token);
+      if(supplied&&!/^\d{6,}:[A-Za-z0-9_-]{30,}$/.test(supplied))throw new Error('Token biçimi hatalı');
+      const config={...saved,token:supplied||saved.token,chatId:message.chatId?.trim()||saved.chatId};
+      if(!/^-?\d+$/.test(config.chatId||''))throw new Error('Chat ID hatalı. Yalnızca rakam ve isteğe bağlı başta - kullan.');
       await sendTelegram(config, 'Test: Meta Reklam Botu bağlandı ✓');
       break;
     }
@@ -250,7 +259,7 @@ async function handle(message, sender) {
       const name = typeof message.name === 'string' ? message.name.trim() : '';
       if (!name || name.length > 100) throw new Error('1–100 karakter uzunluğunda bir marka adı gir.');
       if (state.competitors.some((item) => item.toLocaleLowerCase('tr-TR') === name.toLocaleLowerCase('tr-TR'))) throw new Error('Bu marka zaten listende.');
-      if (state.competitors.length >= 500) throw new Error('En fazla 500 marka saklanabilir.');
+      if (state.competitors.length >= 10) throw new Error('En fazla 10 marka saklanabilir.');
       await chrome.storage.local.set({ competitors: [...state.competitors, name] });
       break;
     }
@@ -310,6 +319,7 @@ function makeNotification(entry) {
   return { id: crypto.randomUUID(), sessionId: entry.sessionId, attempts: 0, nextAttempt: Date.now(),
     text: `Meta Reklam Botu — Tarama raporu\nReklam: ${entry.adCount}\nScroll: ${entry.scrollCount}\nDurum: ${entry.reason}\n${entry.sourceUrl || ''}`.slice(0, 4000) };
 }
+function isTokenPlaceholder(value){return !String(value||'').trim()||/^[.\s•●*…]+$/u.test(String(value));}
 function normalizeTelegramToken(value) {
   return String(value||'').trim().replace(/^[\s'"“”‘’`]+|[\s'"“”‘’`]+$/g,'').replace(/^bot\s*/i,'').replace(/^[\s'"“”‘’`]+|[\s'"“”‘’`]+$/g,'').replace(/\s+/g,'');
 }
@@ -323,14 +333,16 @@ async function sendTelegram(config, text) {
       signal: AbortSignal.timeout(10000), redirect: 'error', credentials: 'omit'
     });
   } catch {
-    const error = new Error('Telegram ağına ulaşılamadı. Bağlantıyı kontrol et.');
+    const error = new Error("Telegram'a ulaşılamadı");
     error.retryable = true; throw error;
   }
   const result = await response.json().catch(() => ({}));
   if (!response.ok || !result.ok) {
     // Never include Telegram's raw response or request URL: both can reveal credentials.
-    const description=String(result.description||'').toLowerCase();
-    const error = new Error(response.status===401||description.includes('unauthorized')?'Token hatalı':description.includes('chat not found')?"Önce Telegram'da botuna /start yaz":description.includes('bot was blocked')?'Telegram botunun engelini kaldır ve /start yaz':response.status === 429 ? 'Telegram hız sınırına ulaşıldı.' : 'Telegram gönderimi reddetti. Token, Chat ID ve bot erişimini kontrol et.');
+    const description=String(result.description||'').replaceAll(config.token,'[gizlendi]').replace(/(?:bot)?\d{6,}:[A-Za-z0-9_-]+/g,'[gizlendi]').slice(0,250);
+    const lower=description.toLowerCase();
+    const translated=response.status===401||lower.includes('unauthorized')?"Telegram bu token'ı kabul etmedi, BotFather'dan yenisini al":lower.includes('chat not found')?"Önce Telegram'da botuna /start yaz":response.status===429?'Telegram hız sınırına ulaşıldı.':'Telegram gönderimi reddetti.';
+    const error=new Error(translated+(description?' · '+description:''));
     error.retryable = response.status === 429 || response.status >= 500;
     error.retryAfter = Math.min(3600, Math.max(60, Number(result.parameters?.retry_after) || 60));
     throw error;
@@ -383,3 +395,5 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 chrome.runtime.onStartup.addListener(scheduleDelivery);
 chrome.runtime.onInstalled.addListener(scheduleDelivery);
+
+const competitorService=globalThis.CompetitorWatch?CompetitorWatch.create(chrome,{enqueue,sendTelegram}):null;

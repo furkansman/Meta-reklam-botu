@@ -203,6 +203,15 @@ test('Telegram test payload and Turkish API errors do not expose credentials',as
  const h=harness(),token='1234567890:AAH_abcdefghijklmnopqrstuvwxyz123456';
  await h.send({type:'SAVE_TELEGRAM',token,chatId:'123456789',enabled:true});
  await h.send({type:'TEST_TELEGRAM'});assert.equal(JSON.parse(h.requests[0].options.body).text,'Test: Meta Reklam Botu bağlandı ✓');
- h.apiStatus(400,'Bad Request: chat not found');assert.equal((await h.send({type:'TEST_TELEGRAM'})).error,"Önce Telegram'da botuna /start yaz");
- h.apiStatus(401,'Unauthorized');assert.equal((await h.send({type:'TEST_TELEGRAM'})).error,'Token hatalı');
+ h.apiStatus(400,'Bad Request: chat not found');assert((await h.send({type:'TEST_TELEGRAM'})).error.startsWith("Önce Telegram'da botuna /start yaz"));
+ h.apiStatus(401,'Unauthorized');assert((await h.send({type:'TEST_TELEGRAM'})).error.includes("Telegram bu token'ı kabul etmedi"));
+});
+
+test('placeholder and blank reuse saved token; unsaved token test does not replace storage',async()=>{
+ const h=harness();const saved='1234567890:AAH_saved_token_abcdefghijklmnopqrstuvwxyz';const draft='9876543210:AAH_draft_token_abcdefghijklmnopqrstuvwxyz';
+ await h.send({type:'SAVE_TELEGRAM',token:saved,chatId:'12345',enabled:true});
+ await h.send({type:'SAVE_TELEGRAM',token:'••••••••',chatId:'12345',enabled:true});assert.equal(h.store.telegramConfig.token,saved);
+ await h.send({type:'TEST_TELEGRAM',token:'........',chatId:'12345'});assert(h.requests.at(-1).url.includes(saved));
+ await h.send({type:'TEST_TELEGRAM',token:draft,chatId:'12345'});assert(h.requests.at(-1).url.includes(draft));assert.equal(h.store.telegramConfig.token,saved);
+ h.store.telegramConfig.token='legacy-token';assert.equal((await h.send({type:'SAVE_TELEGRAM',token:'',chatId:'12345',enabled:true})).ok,true);
 });
