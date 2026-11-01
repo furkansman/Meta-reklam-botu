@@ -46,6 +46,25 @@
       }
       if (card.getClientRects().length && !found.has(id)) found.set(id, card);
     }
+    // Fallback for cards identified by a permalink or a semantic data attribute.
+    for (const marker of document.querySelectorAll('a[href*="/ads/library/"], [data-ad-id]')) {
+      let id = marker.getAttribute('data-ad-id');
+      if (!id && marker.href) { try { id = new URL(marker.href).searchParams.get('id'); } catch {} }
+      if (!/^\d{5,}$/.test(id || '') || found.has(id)) continue;
+      let card = marker;
+      for (let depth = 0; depth < 14 && card.parentElement && card.parentElement !== document.body; depth++) {
+        if (card.matches('article,[role="article"]')) break;
+        const parent = card.parentElement;
+        if (parent.matches('main,[role="main"]')) break;
+        const otherIds = [...textOf(parent).matchAll(new RegExp(ID_LABEL.source, 'gi'))].map((match) => match[1]);
+        for (const link of parent.querySelectorAll('a[href*="/ads/library/"]')) {
+          try { const other = new URL(link.href).searchParams.get('id'); if (other) otherIds.push(other); } catch {}
+        }
+        if (otherIds.some((other) => other !== id)) break;
+        card = parent;
+      }
+      if (card.getClientRects().length) found.set(id, card);
+    }
     return found;
   }
 
@@ -62,12 +81,13 @@
     return {
       id, advertiser: advertiserLink ? textOf(advertiserLink) : null,
       advertiserUrl: advertiserLink ? safeUrl(advertiserLink.href) : null,
-      text: texts.join('\n'), rawText: textOf(card),
+      text: texts.join('\n').slice(0, 30000), rawText: textOf(card).slice(0, 50000),
+      mediaType: card.querySelector('video') ? 'video' : card.querySelector('img') ? 'image' : 'text',
       libraryUrl: `https://www.facebook.com/ads/library/?id=${id}`,
       links,
       destinationUrls: links.filter((href) => { const host = new URL(href).hostname; return host !== 'facebook.com' && !host.endsWith('.facebook.com'); }),
       images: [...new Set([...card.querySelectorAll('img')].map((img) => safeUrl(img.currentSrc || img.src)).filter(Boolean))],
-      videos: [...new Set([...card.querySelectorAll('video')].map((video) => safeUrl(video.currentSrc || video.src)).filter(Boolean))],
+      videos: [...new Set([...card.querySelectorAll('video, video source')].map((video) => safeUrl(video.currentSrc || video.src)).filter(Boolean))],
       platforms: [...new Set([...card.querySelectorAll('[aria-label], [title]')].flatMap((element) => {
         const label = element.getAttribute('aria-label') || element.getAttribute('title') || '';
         return /^(facebook|instagram)$/i.test(label) ? [label.toLowerCase()] : [];
@@ -89,7 +109,8 @@
       while (!current.stopped) {
         if (!onLibrary() || location.href !== current.url) { reason = 'page-changed'; break; }
         const before = current.ads.size;
-        for (const [id, card] of cards()) {
+        const visibleCards = cards();
+        for (const [id, card] of visibleCards) {
           if (current.ads.size >= current.settings.maxAds) break;
           current.ads.set(id, extract(id, card));
         }
@@ -99,7 +120,11 @@
         if (!current.settings.autoScroll) { reason = 'visible-complete'; break; }
         if (idle >= 8) { reason = 'no-new-ads'; break; }
         if (current.stopped) break;
-        window.scrollBy({ top: Math.max(500, window.innerHeight * 0.85), behavior: 'instant' });
+        const firstCard = visibleCards.values().next().value;
+        let scroller = firstCard?.parentElement;
+        while (scroller && scroller !== document.body && !(scroller.scrollHeight > scroller.clientHeight + 50 && /auto|scroll/.test(getComputedStyle(scroller).overflowY))) scroller = scroller.parentElement;
+        const target = scroller && scroller !== document.body ? scroller : window;
+        target.scrollBy({ top: Math.max(500, (target === window ? window.innerHeight : target.clientHeight) * 0.85), behavior: 'instant' });
         current.scrollCount++;
         await new Promise((resolve) => {
           const timer = setTimeout(() => { wake = null; resolve(); }, DELAYS[current.settings.speed]);

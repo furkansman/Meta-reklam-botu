@@ -1,10 +1,14 @@
 'use strict';
 
 const DEFAULTS = {
-  ads: [], scrollCount: 0, history: [], competitors: [],
+  ads: [], scrollCount: 0, history: [], competitors: [], competitorStats: {},
   settings: { autoScroll: true, speed: 'medium', maxAds: 100 },
+  telegramStatus: { enabled: false, tokenConfigured: false, chatId: '' },
   filters: { mediaType: 'all', platform: 'all' }, scan: { running: false, reason: '' }
 };
+// Content scripts never need access to bot credentials.
+chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }).catch(() => {});
+
 // Serialize mutations, including tab events, to keep one scan and avoid lost writes.
 // Durable state lives in storage, so worker suspension does not lose ownership.
 let queue = Promise.resolve();
@@ -34,9 +38,27 @@ async function finish(state, reason, results = {}) {
   const scrollCount = results.scrollCount ?? state.scrollCount;
   const scan = { ...state.scan, running: false, stopping: false, reason, updatedAt: Date.now() };
   const entry = { sessionId: scan.sessionId, createdAt: scan.startedAt, adCount: ads.length, scrollCount,
-    reason, settings: state.settings, sourceUrl: scan.sourceUrl };
+    reason, settings: state.settings, sourceUrl: scan.sourceUrl, ads };
+  const telegram = await chrome.storage.local.get(['telegramConfig', 'telegramOutbox']);
+  const enabled = telegram.telegramConfig?.enabled;
+  const canQueue = enabled && (telegram.telegramOutbox || []).length < 50;
+  entry.telegram = enabled ? (canQueue ? 'queued' : 'queue-full') : 'disabled';
+  const history = archiveHistory([entry, ...state.history].slice(0, 100));
+  const outbox = canQueue ? [...(telegram.telegramOutbox || []), makeNotification(entry)].slice(-50) : (telegram.telegramOutbox || []);
+  const competitorStats = { ...state.competitorStats };
+  let query = '';
+  try { query = new URL(scan.sourceUrl).searchParams.get('q')?.trim().toLocaleLowerCase('tr-TR') || ''; } catch {}
+  for (const name of state.competitors) {
+    const normalized = name.toLocaleLowerCase('tr-TR');
+    const matching = ads.filter((ad) => query === normalized || ad.advertiser?.trim().toLocaleLowerCase('tr-TR') === normalized);
+    if (!matching.length && query !== normalized) continue;
+    const previous = new Set(competitorStats[name]?.ids || []);
+    const ids = matching.map((ad) => ad.id);
+    competitorStats[name] = { ids, count: ids.length, newCount: ids.filter((id) => !previous.has(id)).length, updatedAt: Date.now() };
+  }
   try {
-    await chrome.storage.local.set({ ads, scrollCount, scan, history: [entry, ...state.history].slice(0, 100) });
+    await chrome.storage.local.set({ ads, scrollCount, scan, history, telegramOutbox: outbox, competitorStats });
+    if (canQueue) { scheduleDelivery(); }
   } catch (error) {
     // If even the history entry exceeds quota, release ownership without rewriting results.
     await chrome.storage.local.set({ scan: { running: false, reason: 'storage-error' } });
@@ -100,8 +122,13 @@ async function handle(message, sender) {
       // Save ownership before starting; queued progress cannot overtake this write.
       await chrome.storage.local.set({ ads: [], scrollCount: 0, settings, scan });
       try {
-        const response = await chrome.tabs.sendMessage(tab.id, { type: 'META_SCAN_START', settings, tabId: tab.id,
-          sessionId: scan.sessionId }, { frameId: 0 });
+        const startMessage = { type: 'META_SCAN_START', settings, tabId: tab.id, sessionId: scan.sessionId };
+        let response;
+        try { response = await chrome.tabs.sendMessage(tab.id, startMessage, { frameId: 0 }); }
+        catch {
+          await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
+          response = await chrome.tabs.sendMessage(tab.id, startMessage, { frameId: 0 });
+        }
         if (!response?.ok) throw new Error(response?.error || 'Tarama başlatılamadı.');
       } catch (error) {
         // A failed start must not erase the previous exported results.
@@ -125,7 +152,38 @@ async function handle(message, sender) {
       if ((await reconcile()).scan.running) throw new Error('Önce taramayı durdur.');
       await chrome.storage.local.set({ ads: [], scrollCount: 0, scan: { running: false, reason: '' } });
       break;
-    case 'CLEAR_HISTORY': await chrome.storage.local.set({ history: [] }); break;
+    case 'CLEAR_HISTORY': await chrome.storage.local.set({ history: [], telegramOutbox: [] }); break;
+    case 'SAVE_TELEGRAM': {
+      const { telegramConfig: old = {} } = await chrome.storage.local.get('telegramConfig');
+      const token = typeof message.token === 'string' && message.token.trim() ? message.token.trim() : old.token || '';
+      const chatId = typeof message.chatId === 'string' ? message.chatId.trim() : '';
+      if (typeof message.enabled !== 'boolean' || (token && !/^\d{5,}:[A-Za-z0-9_-]{20,}$/.test(token)) ||
+          (chatId && !/^(?:-?\d{1,20}|@[A-Za-z0-9_]{5,})$/.test(chatId)) || (message.enabled && (!token || !chatId))) {
+        throw new Error('Geçerli Telegram Bot Token ve Chat ID gir.');
+      }
+      await chrome.storage.local.set({ telegramConfig: { token, chatId, enabled: message.enabled },
+        telegramStatus: { enabled: message.enabled, tokenConfigured: Boolean(token), chatId } });
+      break;
+    }
+    case 'REMOVE_TELEGRAM':
+      await chrome.storage.local.set({ telegramConfig: {}, telegramStatus: DEFAULTS.telegramStatus, telegramOutbox: [] });
+      break;
+    case 'TEST_TELEGRAM': {
+      const { telegramConfig: config } = await chrome.storage.local.get('telegramConfig');
+      await sendTelegram(config, 'Meta Reklam Botu: Telegram bağlantısı başarılı.');
+      break;
+    }
+    case 'SEND_SUMMARY': {
+      const entry = state.history.find((item) => item.sessionId === message.sessionId);
+      if (!entry) throw new Error('Geçmiş oturumu bulunamadı.');
+      const { telegramConfig: config, telegramOutbox = [] } = await chrome.storage.local.get(['telegramConfig', 'telegramOutbox']);
+      if (!config?.enabled || !config.token || !config.chatId) throw new Error('Önce Telegram bildirimlerini kaydet ve etkinleştir.');
+      if (telegramOutbox.length >= 50) throw new Error('Telegram kuyruğu dolu. Önce bekleyen gönderimleri tamamla.');
+      if (telegramOutbox.some((job) => job.sessionId === entry.sessionId)) throw new Error('Bu rapor zaten gönderim sırasında.');
+      await chrome.storage.local.set({ telegramOutbox: [...telegramOutbox, makeNotification(entry)].slice(-50) });
+      scheduleDelivery();
+      break;
+    }
     case 'ADD_COMPETITOR': {
       const name = typeof message.name === 'string' ? message.name.trim() : '';
       if (!name || name.length > 100) throw new Error('1–100 karakter uzunluğunda bir marka adı gir.');
@@ -134,7 +192,10 @@ async function handle(message, sender) {
       await chrome.storage.local.set({ competitors: [...state.competitors, name] });
       break;
     }
-    case 'REMOVE_COMPETITOR': await chrome.storage.local.set({ competitors: state.competitors.filter((name) => name !== message.name) }); break;
+    case 'REMOVE_COMPETITOR': {
+      const competitorStats = { ...state.competitorStats }; delete competitorStats[message.name];
+      await chrome.storage.local.set({ competitors: state.competitors.filter((name) => name !== message.name), competitorStats }); break;
+    }
     case 'SAVE_FILTERS':
       if (!message.filters || !['all', 'image', 'video'].includes(message.filters.mediaType) ||
           !['all', 'facebook', 'instagram'].includes(message.filters.platform)) throw new Error('Geçersiz filtre.');
@@ -170,3 +231,89 @@ chrome.runtime.onInstalled.addListener(() => { void enqueue(async () => {
   if (Object.keys(missing).length) await chrome.storage.local.set(missing);
   await reconcile();
 }).catch(console.warn); });
+
+
+// Keep detailed archives within a conservative budget; preserve older summaries.
+function archiveHistory(history) {
+  let budget = 3 * 1024 * 1024;
+  return history.map((entry) => {
+    if (!Array.isArray(entry.ads)) return entry;
+    const bytes = JSON.stringify(entry.ads).length * 2;
+    if (bytes <= budget) { budget -= bytes; return entry; }
+    const { ads, ...summary } = entry;
+    return { ...summary, archiveExpired: true };
+  });
+}
+function makeNotification(entry) {
+  return { id: crypto.randomUUID(), sessionId: entry.sessionId, attempts: 0, nextAttempt: Date.now(),
+    text: `Meta Reklam Botu — Tarama raporu\nReklam: ${entry.adCount}\nScroll: ${entry.scrollCount}\nDurum: ${entry.reason}\n${entry.sourceUrl || ''}`.slice(0, 4000) };
+}
+async function sendTelegram(config, text) {
+  if (!config?.token || !config.chatId) throw new Error('Önce Telegram Bot Token ve Chat ID kaydet.');
+  let response;
+  try {
+    response = await fetch(`https://api.telegram.org/bot${config.token}/sendMessage`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: config.chatId, text, link_preview_options: { is_disabled: true } }),
+      signal: AbortSignal.timeout(10000), redirect: 'error', credentials: 'omit'
+    });
+  } catch {
+    const error = new Error('Telegram ağına ulaşılamadı. Bağlantıyı kontrol et.');
+    error.retryable = true; throw error;
+  }
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.ok) {
+    // Never include Telegram's raw response or request URL: both can reveal credentials.
+    const error = new Error(response.status === 429 ? 'Telegram hız sınırına ulaşıldı.' : 'Telegram gönderimi reddetti. Token, Chat ID ve bot erişimini kontrol et.');
+    error.retryable = response.status === 429 || response.status >= 500;
+    error.retryAfter = Math.min(3600, Math.max(60, Number(result.parameters?.retry_after) || 60));
+    throw error;
+  }
+}
+let delivering = false;
+function scheduleDelivery() {
+  chrome.alarms.create('telegram-delivery', { delayInMinutes: 1 }).catch(() => {});
+  // Schedule outside the mutation queue; a slow network must not block scanning.
+  void deliverNotifications().catch(() => {});
+}
+async function deliverNotifications() {
+  if (delivering) return;
+  delivering = true;
+  try {
+    while (true) {
+      const job = await enqueue(async () => {
+        const { telegramOutbox = [], telegramConfig } = await chrome.storage.local.get(['telegramOutbox', 'telegramConfig']);
+        if (!telegramConfig?.enabled) return null;
+        const next = telegramOutbox.find((item) => item.nextAttempt <= Date.now());
+        if (!next) return null;
+        // Lease survives worker suspension. Telegram sendMessage has no idempotency key.
+        next.nextAttempt = Date.now() + 60000;
+        await chrome.storage.local.set({ telegramOutbox });
+        return { ...next, config: telegramConfig };
+      });
+      if (!job) break;
+      let failure;
+      try { await sendTelegram(job.config, job.text); } catch (error) { failure = error; }
+      await enqueue(async () => {
+        const { telegramOutbox = [], history = [] } = await chrome.storage.local.get(['telegramOutbox', 'history']);
+        const pending = telegramOutbox.find((item) => item.id === job.id);
+        if (!pending) return;
+        const retry = failure?.retryable && pending.attempts < 2;
+        pending.attempts++;
+        pending.nextAttempt = Date.now() + (failure?.retryAfter || 60 * pending.attempts) * 1000;
+        const status = retry ? 'retrying' : failure ? 'failed' : 'sent';
+        await chrome.storage.local.set({ telegramOutbox: retry ? telegramOutbox : telegramOutbox.filter((item) => item.id !== job.id),
+          history: history.map((entry) => entry.sessionId === job.sessionId ? { ...entry, telegram: status } : entry) });
+      });
+    }
+  } finally {
+    delivering = false;
+    const { telegramOutbox = [] } = await chrome.storage.local.get('telegramOutbox');
+    if (telegramOutbox.length) await chrome.alarms.create('telegram-delivery', { delayInMinutes: 1 });
+  }
+}
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'telegram-delivery') void deliverNotifications().catch(() => {});
+});
+chrome.runtime.onStartup.addListener(scheduleDelivery);
+chrome.runtime.onInstalled.addListener(scheduleDelivery);

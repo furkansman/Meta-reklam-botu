@@ -11,7 +11,7 @@
   <header class="header">
     <div class="brand-icon" aria-hidden="true">M</div>
     <div><h1>Meta Reklam Botu</h1><p>Reklam araştırma asistanın</p></div>
-    <span class="badge">BETA</span>
+    <span class="badge">v0.3</span>
   </header>
   <nav class="tabs" role="tablist" aria-label="Ana menü">
     <button id="tab-scan" class="tab active" role="tab" aria-selected="true" aria-controls="scan" tabindex="0">Tarama</button>
@@ -41,6 +41,8 @@
     </section>
     <section id="history" role="tabpanel" aria-labelledby="tab-history" hidden>
       <div class="section-heading"><div><h2>Arama geçmişi</h2><p>Kaydettiğin araştırmalara geri dön.</p></div></div>
+      <div class="export-actions"><button id="history-csv" class="secondary" type="button">Tümünü CSV indir</button><button id="history-json" class="secondary" type="button">Tümünü JSON indir</button></div>
+      <p class="hint">Arşivlenen reklamlar oturum bazında indirilebilir. Eski sürümlerin yalnızca özet içeren kayıtları ayrıca belirtilir.</p>
       <ul id="history-list" class="items"></ul>
       <p id="history-empty" class="empty">Henüz arama yok. Tarama sekmesinden başlayabilirsin.</p>
       <button id="clear-history" class="secondary" type="button">Geçmişi temizle</button>
@@ -48,7 +50,7 @@
     <section id="competitors" role="tabpanel" aria-labelledby="tab-competitors" hidden>
       <div class="section-heading"><div><h2>Rakiplerini takip et</h2><p>İlgilendiğin markaları listene ekle.</p></div></div>
       <form id="competitor-form" class="card"><label for="competitor-name">Marka adı</label><input id="competitor-name" required maxlength="100" placeholder="Takip edilecek marka"><button class="primary" type="submit">Listeye ekle <span aria-hidden="true">+</span></button></form>
-      <ul id="competitor-list" class="items"></ul><p id="competitors-empty" class="empty">Takip listen henüz boş.</p><p class="hint">Liste yerel olarak saklanır. Otomatik takip henüz etkin değil.</p>
+      <ul id="competitor-list" class="items"></ul><p id="competitors-empty" class="empty">Takip listen henüz boş.</p><p class="hint">Markanın reklamlarını açıp tarama başlat. Son taramadaki reklamlar önceki taramayla karşılaştırılır; yeni reklam sayısı burada gösterilir.</p>
     </section>
     <section id="filters" role="tabpanel" aria-labelledby="tab-filters" hidden>
       <div class="section-heading"><div><h2>Aramanı özelleştir</h2><p>Bir sonraki araştırman için tercihlerini kaydet.</p></div></div>
@@ -58,9 +60,22 @@
         <button class="primary" type="submit">Tercihleri kaydet <span aria-hidden="true">✓</span></button>
         <p class="hint">Filtreler dışa aktarılan sonuçlara uygulanır. Platformu belirlenemeyen reklamlar yalnızca “Tüm platformlar” seçeneğinde yer alır.</p>
       </form>
+      <form id="telegram-form" class="card telegram-card">
+        <h3>Telegram bildirimleri</h3>
+        <p class="subtle">Tarama tamamlanınca botuna özet rapor gönder.</p>
+        <label class="toggle" for="telegram-enabled"><input id="telegram-enabled" type="checkbox"> Bildirimleri etkinleştir</label>
+        <label for="telegram-token">Telegram Bot Token</label>
+        <input id="telegram-token" type="password" autocomplete="off" spellcheck="false" maxlength="200" placeholder="BotFather tarafından verilen token">
+        <p id="token-status" class="hint">Token henüz kaydedilmedi.</p>
+        <label for="telegram-chat-id">Chat ID</label>
+        <input id="telegram-chat-id" type="text" autocomplete="off" spellcheck="false" maxlength="32" placeholder="Örn. 123456789 veya -1001234567890">
+        <button class="primary" type="submit">Telegram ayarlarını kaydet <span aria-hidden="true">✓</span></button>
+        <div class="export-actions"><button id="telegram-test" class="secondary" type="button">Test mesajı</button><button id="telegram-remove" class="secondary danger" type="button">Bilgileri sil</button></div>
+        <p class="hint">Botla önce Telegram’da /start ile konuş. Token yalnızca bu tarayıcının yerel alanında saklanır; Chrome Sync’e ve dışa aktarılan raporlara eklenmez.</p>
+      </form>
     </section>
     <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
   </main>
-  <footer><span class="status-dot"></span> Yerel çalışma alanı <span>v0.2.0</span></footer>
+  <footer><span class="status-dot"></span> Yerel çalışma alanı <span>v0.3.0</span></footer>
 </body>
 </html>

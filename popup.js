@@ -6,8 +6,8 @@ const feedback = (message) => { $('#feedback').textContent = message; };
 let running = false;
 let ready = false;
 let busy = false;
-let refreshVersion = 0;
-let state = { ads: [], scrollCount: 0, settings: { autoScroll: true, speed: 'medium', maxAds: 100 }, history: [], competitors: [], filters: { mediaType: 'all', platform: 'all' } };
+let refreshQueue = Promise.resolve();
+let state = { telegramStatus: { enabled: false, tokenConfigured: false, chatId: '' }, ads: [], scrollCount: 0, settings: { autoScroll: true, speed: 'medium', maxAds: 100 }, history: [], competitors: [], competitorStats: {}, filters: { mediaType: 'all', platform: 'all' } };
 
 function activateTab(tab) {
   tabs.forEach((item) => {
@@ -45,16 +45,45 @@ function render() {
     const detail = document.createElement('small');
     detail.textContent = `${entry.adCount ?? 0} reklam · ${new Date(entry.createdAt).toLocaleString('tr-TR')}`;
     text.append(detail);
-    li.append(text);
+    const archive = Array.isArray(entry.ads);
+    const status = document.createElement('small');
+    const telegramLabels = { queued: 'Telegram sırada', retrying: 'Telegram yeniden denenecek', sent: 'Telegram gönderildi', failed: 'Telegram gönderilemedi', disabled: 'Telegram kapalı', 'queue-full': 'Telegram kuyruğu dolu' };
+    status.textContent = `${archive ? 'Veriler arşivlendi' : 'Yalnızca özet (arşiv yok)'} · ${telegramLabels[entry.telegram] || ''}`;
+    text.append(status);
+    const actions = document.createElement('div');
+    actions.className = 'history-actions';
+    for (const format of ['csv', 'json']) {
+      const button = document.createElement('button');
+      button.type = 'button'; button.className = 'remove'; button.textContent = format.toUpperCase();
+      button.disabled = !archive || !entry.ads.length;
+      button.setAttribute('aria-label', `${new Date(entry.createdAt).toLocaleString('tr-TR')} oturumunu ${format.toUpperCase()} indir`);
+      button.addEventListener('click', () => downloadRecords(entry.ads, format, `oturum-${entry.sessionId || entry.createdAt}`));
+      actions.append(button);
+    }
+    const summary = document.createElement('button');
+    summary.type = 'button'; summary.className = 'remove'; summary.textContent = 'Telegram özeti';
+    summary.disabled = !state.telegramStatus.enabled || !entry.sessionId;
+    summary.addEventListener('click', () => perform(summary, async () => {
+      await command('SEND_SUMMARY', { sessionId: entry.sessionId });
+      feedback('Özet Telegram gönderim sırasına alındı.');
+    }));
+    actions.append(summary);
+    li.className = 'history-item';
+    li.append(text, actions);
     $('#history-list').append(li);
   });
   $('#history-empty').hidden = state.history.length > 0;
   $('#clear-history').hidden = state.history.length === 0;
+  for (const id of ['history-csv', 'history-json']) document.getElementById(id).disabled = !ready || !state.history.some((entry) => entry.ads?.length);
   $('#competitor-list').replaceChildren();
   state.competitors.forEach((name) => {
     const li = document.createElement('li');
     const label = document.createElement('span');
     label.textContent = name;
+    const stats = state.competitorStats[name];
+    const detail = document.createElement('small');
+    detail.textContent = stats ? `${stats.count} reklam · ${stats.newCount} yeni · ${new Date(stats.updatedAt).toLocaleDateString('tr-TR')}` : 'Henüz taranmadı';
+    label.append(detail);
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'remove';
@@ -96,7 +125,7 @@ async function perform(button, operation) {
 function filteredAds() {
   return state.ads.filter((ad) => {
     const media = state.filters.mediaType;
-    const mediaMatch = media === 'all' || (media === 'video' ? ad.videos?.length > 0 : ad.images?.length > 0 && !ad.videos?.length);
+    const mediaMatch = media === 'all' || (media === 'video' ? (ad.mediaType === 'video' || ad.videos?.length > 0) : (ad.mediaType === 'image' || ad.images?.length > 0) && ad.mediaType !== 'video' && !ad.videos?.length);
     return mediaMatch && (state.filters.platform === 'all' || ad.platforms?.includes(state.filters.platform));
   });
 }
@@ -147,7 +176,7 @@ $('#clear-results').addEventListener('click', (event) => perform(event.currentTa
 function csvCell(value) {
   let text = typeof value === 'object' && value !== null ? JSON.stringify(value) : String(value ?? '');
   // Prevent spreadsheet formula execution when opening exported untrusted ad text.
-  if (/^[=+\-@\t\r\n]/.test(text)) text = "'" + text;
+  if (/^(?:\s*[=+\-@]|[\t\r\n])/.test(text)) text = "'" + text;
   return '"' + text.replaceAll('"', '""') + '"';
 }
 
@@ -155,6 +184,11 @@ function exportAds(format) {
   if (!ready || busy || running) return;
   const ads = filteredAds();
   if (!ads.length) { feedback('Seçili filtrelere uygun sonuç yok.'); return; }
+  downloadRecords(ads, format, 'meta-reklamlar');
+}
+
+function downloadRecords(ads, format, name) {
+  if (!ready || !ads.length) { feedback('İndirilecek arşiv verisi bulunamadı.'); return; }
   let content = JSON.stringify(ads, null, 2);
   if (format === 'csv') {
     const columns = [...new Set(ads.flatMap((ad) => Object.keys(ad)))];
@@ -165,7 +199,7 @@ function exportAds(format) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `meta-reklamlar-${Date.now()}.${format}`;
+  link.download = `${name}-${Date.now()}.${format}`;
   document.body.append(link);
   link.click();
   link.remove();
@@ -174,6 +208,32 @@ function exportAds(format) {
 }
 $('#export-csv').addEventListener('click', () => exportAds('csv'));
 $('#export-json').addEventListener('click', () => exportAds('json'));
+for (const format of ['csv', 'json']) document.getElementById(`history-${format}`).addEventListener('click', () => {
+  const records = state.history.flatMap((entry) => (entry.ads || []).map((ad) => ({ sessionId: entry.sessionId, sessionDate: new Date(entry.createdAt).toISOString(), ...ad })));
+  downloadRecords(records, format, 'meta-gecmis');
+});
+$('#telegram-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  perform(event.submitter, async () => {
+    await command('SAVE_TELEGRAM', { token: $('#telegram-token').value, chatId: $('#telegram-chat-id').value, enabled: $('#telegram-enabled').checked });
+    $('#telegram-token').value = '';
+    await refreshState();
+    populateTelegram();
+    feedback('Telegram ayarları kaydedildi. Test mesajıyla bağlantını kontrol edebilirsin.');
+  });
+});
+$('#telegram-test').addEventListener('click', (event) => perform(event.currentTarget, async () => {
+  await command('TEST_TELEGRAM'); feedback('Telegram test mesajı gönderildi.');
+}));
+$('#telegram-remove').addEventListener('click', (event) => perform(event.currentTarget, async () => {
+  await command('REMOVE_TELEGRAM'); await refreshState(); populateTelegram(); $('#telegram-token').value = ''; feedback('Telegram bilgileri silindi.');
+}));
+function populateTelegram() {
+  $('#telegram-enabled').checked = state.telegramStatus.enabled;
+  $('#telegram-chat-id').value = state.telegramStatus.chatId;
+  $('#token-status').textContent = state.telegramStatus.tokenConfigured ? 'Token kayıtlı. Değiştirmek için yenisini gir; boş bırakırsan korunur.' : 'Token henüz kaydedilmedi.';
+}
+
 
 $('#clear-history').addEventListener('click', (event) => perform(event.currentTarget, async () => {
   await command('CLEAR_HISTORY');
@@ -214,15 +274,17 @@ const REASONS = {
   'storage-error': 'Sonuçlar kaydedilemedi. Depolama alanını kontrol et.', stopped: 'Tarama durduruldu.',
   disconnected: 'Tarama sekmesi kapandı, yenilendi veya bağlantısı kesildi.', 'start-error': 'Tarama başlatılamadı. Meta sekmesini yenile.'
 };
-async function refreshState(reconcile = false) {
-  const version = ++refreshVersion;
+function refreshState(reconcile = false) {
+  const refresh = async () => {
   const saved = reconcile ? (await command('GET_STATE')).state : await chrome.storage.local.get(Object.keys(state).concat('scan'));
-  if (version !== refreshVersion) return;
   const oldScan = state.scan;
   state = { ...state, ...saved };
   running = Boolean(state.scan?.running);
   render();
   if (!running && state.scan?.reason && (oldScan?.running || oldScan?.reason !== state.scan.reason)) feedback(REASONS[state.scan.reason] || '');
+  };
+  refreshQueue = refreshQueue.then(refresh, refresh);
+  return refreshQueue;
 }
 async function init() {
   const buttons = [...document.querySelectorAll('button:not([role="tab"])')];
@@ -230,6 +292,7 @@ async function init() {
   renderScan();
   try {
     await refreshState(true);
+    populateTelegram();
     $('#media-type').value = state.filters.mediaType;
     $('#platform').value = state.filters.platform;
     $('#auto-scroll').checked = state.settings.autoScroll;
@@ -237,11 +300,11 @@ async function init() {
     $('#max-ads').value = state.settings.maxAds;
     ready = true;
     buttons.forEach((button) => { button.disabled = false; });
-    renderScan();
+    render();
   } catch (error) { feedback(error.message); }
 }
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && ['ads', 'scrollCount', 'scan', 'history', 'competitors', 'filters'].some((key) => key in changes)) {
+  if (area === 'local' && ['ads', 'scrollCount', 'scan', 'history', 'competitors', 'competitorStats', 'filters', 'telegramStatus'].some((key) => key in changes)) {
     refreshState().catch(() => feedback('Tarama durumu okunamadı.'));
   }
 });

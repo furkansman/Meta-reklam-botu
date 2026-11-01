@@ -10,14 +10,19 @@ function harness(shared = {}) {
   const store = shared.store || {};
   const sessions = shared.sessions || new Map();
   const events = {};
+  const requests = [];
+  let apiStatus = 200;
   const event = (name) => ({ addListener(fn) { events[name] = fn; } });
   let activeTab = { id: 7, url };
   let failStart = false, failQuota = false;
   const chrome = {
     runtime: { id: 'test', getURL: (path) => `chrome-extension://test/${path}`, onMessage: event('message'),
       onStartup: event('startup'), onInstalled: event('installed') },
+    scripting: { async executeScript() {} },
+    alarms: { async create() {}, onAlarm: event('alarm') },
     storage: { local: {
-      async get(keys) { return structuredClone(Object.fromEntries(keys.filter((key) => key in store).map((key) => [key, store[key]]))); },
+      async setAccessLevel() {},
+      async get(keys) { if (typeof keys === 'string') keys = [keys]; return structuredClone(Object.fromEntries(keys.filter((key) => key in store).map((key) => [key, store[key]]))); },
       async set(values) { if (failQuota && values.ads?.some((ad) => ad.large)) throw new Error('QUOTA'); Object.assign(store, structuredClone(values)); }
     } },
     tabs: {
@@ -30,11 +35,11 @@ function harness(shared = {}) {
       }, onRemoved: event('removed'), onUpdated: event('updated')
     }
   };
-  vm.runInNewContext(source, { chrome, crypto: webcrypto, URL, console, Date });
+  vm.runInNewContext(source, { chrome, crypto: webcrypto, URL, console, Date, AbortSignal, fetch: async (url, options) => { requests.push({ url, options }); return { ok: apiStatus === 200, status: apiStatus, async json() { return { ok: apiStatus === 200 }; } }; } });
   const send = (message, sender = { id: 'test', url: 'chrome-extension://test/popup.html' }) => new Promise((resolve) => events.message(message, sender, resolve));
   const progress = (overrides = {}, senderOverrides = {}) => send({ type: 'META_SCAN_PROGRESS', sessionId: store.scan.sessionId,
     ads: [{ id: '12345', text: 'Ad' }], scrollCount: 1, ...overrides }, { id: 'test', tab: { id: 7 }, frameId: 0, url, ...senderOverrides });
-  return { store, sessions, events, send, progress, setTab: (tab) => { activeTab = tab; }, failStart: () => { failStart = true; }, failQuota: () => { failQuota = true; } };
+  return { store, sessions, events, send, progress, requests, apiStatus: (status) => { apiStatus = status; }, setTab: (tab) => { activeTab = tab; }, failStart: () => { failStart = true; }, failQuota: () => { failQuota = true; } };
 }
 test('start/progress/stop/finish, single owner and idempotent history', async () => {
   const h = harness();
@@ -100,4 +105,50 @@ test('concurrent starts serialize; competitors and filters persist', async () =>
   await h.send({ type: 'SAVE_FILTERS', filters: { mediaType: 'video', platform: 'instagram' } });
   assert.equal(h.store.filters.platform, 'instagram');
   assert.equal((await h.send({ type: 'SAVE_FILTERS', filters: {} })).ok, false);
+});
+
+test('archive keeps scan data; telegram credential settings stay out of public state', async () => {
+  const h = harness();
+  await h.send({ type: 'SAVE_TELEGRAM', enabled: true, token: '123456:TEST_TOKEN_FOR_UNIT_TESTS_ONLY', chatId: '-1001234567890' });
+  const response = await h.send({ type: 'GET_STATE' });
+  assert.equal(response.state.telegramStatus.tokenConfigured, true);
+  assert(!JSON.stringify(response).includes('TEST_TOKEN'));
+  await h.send({ type: 'SAVE_TELEGRAM', enabled: true, token: '', chatId: '123456789' });
+  assert.equal(h.store.telegramConfig.token, '123456:TEST_TOKEN_FOR_UNIT_TESTS_ONLY');
+  await h.send({ type: 'START_SCAN', settings }); await h.progress();
+  await h.progress({ type: 'META_SCAN_FINISHED', reason: 'limit' });
+  for (let attempt = 0; attempt < 20 && h.store.history[0].telegram !== 'sent'; attempt++) await new Promise(setImmediate);
+  assert.equal(h.store.history[0].ads[0].id, '12345');
+  assert.equal(h.store.history[0].telegram, 'sent');
+  assert.equal(h.requests.length, 1);
+  const payload = JSON.parse(h.requests[0].options.body);
+  assert.equal(payload.chat_id, '123456789'); assert.match(payload.text, /Reklam: 1/);
+  assert.match(h.requests[0].url, /^https:\/\/api\.telegram\.org\/bot.+\/sendMessage$/);
+  await h.send({ type: 'REMOVE_TELEGRAM' });
+  assert.equal(h.store.telegramStatus.tokenConfigured, false);
+  assert.deepEqual(h.store.telegramConfig, {});
+});
+test('telegram API failures are reported safely and transient failures retain durable jobs', async () => {
+  for (const status of [401, 429, 500]) {
+    const h = harness(); h.apiStatus(status);
+    await h.send({ type: 'SAVE_TELEGRAM', enabled: true, token: '123456:TEST_TOKEN_FOR_UNIT_TESTS_ONLY', chatId: '123456789' });
+    const result = await h.send({ type: 'TEST_TELEGRAM' });
+    assert.equal(result.ok, false); assert(!result.error.includes('TEST_TOKEN'));
+    await h.send({ type: 'START_SCAN', settings }); await h.progress(); await h.progress({ type: 'META_SCAN_FINISHED', reason: 'stopped' });
+    for (let attempt = 0; attempt < 20 && h.store.history[0].telegram === 'queued'; attempt++) await new Promise(setImmediate);
+    assert.equal(h.store.history[0].telegram, status === 401 ? 'failed' : 'retrying');
+    assert.equal(h.store.telegramOutbox.length, status === 401 ? 0 : 1);
+    assert.equal(h.store.scan.running, false);
+  }
+});
+
+test('competitor scans compare collected IDs against the previous scan', async () => {
+  const h = harness(); await h.send({ type: 'ADD_COMPETITOR', name: 'test' });
+  for (const ids of [['12345'], ['12345', '67890']]) {
+    await h.send({ type: 'START_SCAN', settings });
+    await h.progress({ type: 'META_SCAN_FINISHED', ads: ids.map((id) => ({ id })), reason: 'stopped' });
+  }
+  assert.equal(h.store.competitorStats.test.count, 2);
+  assert.equal(h.store.competitorStats.test.newCount, 1);
+  assert.equal(h.store.history[1].ads.length, 1);
 });
