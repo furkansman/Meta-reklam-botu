@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Meta Reklam Botu</title>
+  <link rel="stylesheet" href="popup.css">
+  <script src="popup.js" defer></script>
+</head>
+<body>
+  <header class="header">
+    <div class="brand-icon" aria-hidden="true">M</div>
+    <div><h1>Meta Reklam Botu</h1><p>Reklam araştırma asistanın</p></div>
+    <span class="badge">BETA</span>
+  </header>
+  <nav class="tabs" role="tablist" aria-label="Ana menü">
+    <button id="tab-scan" class="tab active" role="tab" aria-selected="true" aria-controls="scan" tabindex="0">Tarama</button>
+    <button id="tab-history" class="tab" role="tab" aria-selected="false" aria-controls="history" tabindex="-1">Geçmiş</button>
+    <button id="tab-competitors" class="tab" role="tab" aria-selected="false" aria-controls="competitors" tabindex="-1">Rakip Takip</button>
+    <button id="tab-filters" class="tab" role="tab" aria-selected="false" aria-controls="filters" tabindex="-1">Filtreler</button>
+  </nav>
+  <main>
+    <section id="scan" role="tabpanel" aria-labelledby="tab-scan">
+      <div class="section-heading"><div><h2>Yeni bir keşfe başla</h2><p>Bir marka veya anahtar kelime ile araştır.</p></div><span class="step">01</span></div>
+      <form id="scan-form" class="card">
+        <label for="query">Marka veya anahtar kelime</label>
+        <input id="query" name="query" placeholder="Örn. spor giyim, marka adı…" required maxlength="160">
+        <div class="form-grid">
+          <div><label for="country">Ülke</label><select id="country"><option value="TR">Türkiye</option><option value="ALL">Tüm ülkeler</option><option value="US">ABD</option></select></div>
+          <div><label for="ad-status">Reklam durumu</label><select id="ad-status"><option value="active">Aktif reklamlar</option><option value="all">Tüm reklamlar</option><option value="inactive">Pasif reklamlar</option></select></div>
+        </div>
+        <button class="primary" type="submit">Taramayı başlat <span aria-hidden="true">→</span></button>
+        <p class="hint">Önizleme sürümü · Henüz canlı reklam taraması yapmaz.</p>
+      </form>
+      <div class="info"><span aria-hidden="true">✦</span><p><strong>Bir sonraki reklam fikrini keşfet.</strong><br>Aramalarını kaydet, rakiplerini tek yerden takip et.</p></div>
+    </section>
+    <section id="history" role="tabpanel" aria-labelledby="tab-history" hidden>
+      <div class="section-heading"><div><h2>Arama geçmişi</h2><p>Kaydettiğin araştırmalara geri dön.</p></div></div>
+      <ul id="history-list" class="items"></ul>
+      <p id="history-empty" class="empty">Henüz arama yok. Tarama sekmesinden başlayabilirsin.</p>
+      <button id="clear-history" class="secondary" type="button">Geçmişi temizle</button>
+    </section>
+    <section id="competitors" role="tabpanel" aria-labelledby="tab-competitors" hidden>
+      <div class="section-heading"><div><h2>Rakiplerini takip et</h2><p>İlgilendiğin markaları listene ekle.</p></div></div>
+      <form id="competitor-form" class="card"><label for="competitor-name">Marka adı</label><input id="competitor-name" required maxlength="100" placeholder="Takip edilecek marka"><button class="primary" type="submit">Listeye ekle <span aria-hidden="true">+</span></button></form>
+      <ul id="competitor-list" class="items"></ul><p id="competitors-empty" class="empty">Takip listen henüz boş.</p><p class="hint">Liste yerel olarak saklanır. Otomatik takip henüz etkin değil.</p>
+    </section>
+    <section id="filters" role="tabpanel" aria-labelledby="tab-filters" hidden>
+      <div class="section-heading"><div><h2>Aramanı özelleştir</h2><p>Bir sonraki araştırman için tercihlerini kaydet.</p></div></div>
+      <form id="filters-form" class="card">
+        <label for="media-type">Medya türü</label><select id="media-type"><option value="all">Tüm medya türleri</option><option value="image">Görsel</option><option value="video">Video</option></select>
+        <label for="platform">Platform</label><select id="platform"><option value="all">Tüm platformlar</option><option value="facebook">Facebook</option><option value="instagram">Instagram</option></select>
+        <button class="primary" type="submit">Tercihleri kaydet <span aria-hidden="true">✓</span></button>
+        <p class="hint">Tercihler kaydedilir; canlı tarama eklendiğinde kullanılacaktır.</p>
+      </form>
+    </section>
+    <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
+  </main>
+  <footer><span class="status-dot"></span> Yerel çalışma alanı <span>v0.1.0</span></footer>
+</body>
+</html>
