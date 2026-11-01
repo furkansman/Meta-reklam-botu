@@ -87,7 +87,7 @@ function validateResults(message, state) {
 }
 function sanitizeDiscovery(value) {
   if (!value || !Number.isInteger(value.candidates) || !Number.isInteger(value.matched)) return null;
-  return { candidates: Math.max(0, value.candidates), matched: Math.max(0, value.matched), version: String(value.version || '').slice(0, 20) };
+  return { candidates: Math.max(0, value.candidates), matched: Math.max(0, value.matched), version: String(value.version || '').slice(0, 20), libraryCodeTexts: Math.max(0, Number.isInteger(value.libraryCodeTexts) ? value.libraryCodeTexts : 0) };
 }
 async function handle(message, sender) {
   const state = await readState();
@@ -127,7 +127,7 @@ async function handle(message, sender) {
         await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content.js'] });
         collector = await chrome.tabs.sendMessage(tab.id, { type: 'META_SCAN_STATUS' }, { frameId: 0 });
       }
-      if (collector?.version !== '0.4.0') throw new Error('Meta sekmesinde eski tarama kodu çalışıyor. Sayfayı yenile; panelde v0.4.0 görünmelidir.');
+      if (collector?.version !== '0.5.0') throw new Error('Meta sekmesinde eski tarama kodu çalışıyor. Sayfayı yenile; panelde v0.5.0 görünmelidir.');
       const scan = { running: true, stopping: false, tabId: tab.id, sessionId: crypto.randomUUID(),
         sourceUrl: tab.url, startedAt: Date.now(), updatedAt: Date.now(), reason: 'running' };
       // Save ownership before starting; queued progress cannot overtake this write.

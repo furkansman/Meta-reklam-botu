@@ -1,13 +1,12 @@
 (() => {
   'use strict';
-  const VERSION = '0.4.0';
+  const VERSION = '0.5.0';
   if (globalThis.__metaAdCollector?.version === VERSION) return;
   // A previous boolean guard belongs to an older, non-disposable collector.
   if (globalThis.__metaAdCollector === true) return;
   globalThis.__metaAdCollector?.dispose?.();
 
-  const ID_LABEL = /(?:Library ID|Ad Library ID|Kütüphane (?:Kimliği|Numarası|No(?:su)?)|Reklam Kütüphanesi Kimliği)\s*[:：]?\s*(\d{5,})/i;
-  const LABEL = /Library ID|Ad Library ID|Kütüphane (?:Kimliği|Numarası|No)|Reklam Kütüphanesi Kimliği/i;
+  const ID_LABEL = /(Kütüphane Kodu|Library ID)\s*:?\s*(\d{10,})/gi;
   const DELAYS = { slow: 3000, medium: 1800, fast: 1000 };
   let session = null;
   let wake = null;
@@ -26,135 +25,123 @@
     } catch { return null; }
   }
 
-  const CARD_SELECTORS = [
-    'div._7jvw', 'div[role="region"]', 'article', '[role="article"]',
-    'div[style*="border" i]', '[data-pagelet*="AdLibrary"]', '[data-ad-id]'
-  ];
-  const SEMANTIC_CARD = 'div._7jvw,article,[role="article"],div[role="region"]';
-  const MESSAGE_SELECTOR = '[data-ad-preview="message"],[data-ad-comet-preview="message"]';
-  function cardIds(card) {
-    const ids = [...textOf(card).matchAll(new RegExp(ID_LABEL.source, 'gi'))].map((match) => match[1]);
-    for (const marker of card.querySelectorAll('[data-ad-id],a[href*="/ads/library"]')) {
-      let id = marker.getAttribute('data-ad-id');
-      if (!id && marker.href) { try { id = new URL(marker.href).searchParams.get('id'); } catch {} }
-      if (/^\d{5,}$/.test(id || '')) ids.push(id);
-    }
-    const ownId = card.getAttribute('data-ad-id');
-    if (/^\d{5,}$/.test(ownId || '')) ids.push(ownId);
-    return [...new Set(ids)];
+  const normalized = (node) => textOf(node).replace(/\s+/g, ' ').trim();
+  const isSponsored = (node) => /^(Sponsorlu|Sponsored)$/i.test(normalized(node));
+  const isDetails = (node) => /^(Reklam Detaylarını Gör|See ad details)$/i.test(normalized(node));
+  function visible(node) {
+    return !node.closest('script,style,noscript,[hidden],[aria-hidden="true"]') && node.getClientRects().length > 0 && getComputedStyle(node).visibility !== 'hidden';
   }
-  function adText(card) {
-    const messages = [...card.querySelectorAll(MESSAGE_SELECTOR)];
-    if (card.matches(MESSAGE_SELECTOR)) messages.unshift(card);
-    if (messages.length) return [...new Set(messages.map(textOf).filter(Boolean))].join('\n');
-    const nodes = [...card.querySelectorAll('[dir="auto"]')];
-    const texts = nodes.filter((node) => !node.querySelector('[dir="auto"]')).map(textOf)
-      .filter((text) => text && !ID_LABEL.test(text));
-    // Plain-text layouts still retain their complete visible card content.
-    return [...new Set(texts)].join('\n') || textOf(card);
+  function matchesIds(node) {
+    return [...normalized(node).matchAll(new RegExp(ID_LABEL.source, ID_LABEL.flags))];
   }
-  function visible(card) {
-    return !card.closest('script,style,[hidden],[aria-hidden="true"]') && card.getClientRects().length > 0 && getComputedStyle(card).visibility !== 'hidden';
-  }
-  function fingerprint(card) {
-    const urls = [...card.querySelectorAll('a[href]')].map((link) => safeUrl(link.href)).filter(Boolean).sort();
-    const media = [...card.querySelectorAll('img,video,source')].map((node) => node.getAttribute('src') || '').sort();
-    const seed = JSON.stringify([adText(card), urls, media]);
-    let first = 2166136261, second = 5381;
-    for (let i = 0; i < seed.length; i++) {
-      first = Math.imul(first ^ seed.charCodeAt(i), 16777619);
-      second = Math.imul(second, 33) ^ seed.charCodeAt(i);
-    }
-    return `dom-${(first >>> 0).toString(16)}-${(second >>> 0).toString(16)}`;
-  }
-  let discovery = { candidates: 0, matched: 0, selectors: {} };
-  function cards() {
-    const pool = new Set();
-    const counts = {};
-    // Query separately: a Meta layout may only expose one of these contracts.
-    for (const selector of CARD_SELECTORS) {
-      const nodes = document.querySelectorAll(selector);
-      counts[selector] = nodes.length;
-      nodes.forEach((node) => pool.add(node));
-    }
-    // A labelled ID can still locate a card when no known class/border is present.
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    let node;
-    const markers = [...document.querySelectorAll('[data-ad-id],a[href*="/ads/library"]')];
-    while ((node = walker.nextNode())) if (LABEL.test(node.textContent)) markers.push(node.parentElement);
-    for (const marker of markers) {
-      let parent = marker;
-      let largest;
-      for (let depth = 0; depth < 12 && parent && parent !== document.body; depth++, parent = parent.parentElement) {
-        if (parent.matches('main,[role="main"]')) break;
-        const ids = cardIds(parent);
-        if (ids.length > 1) break;
-        if (ids.length === 1) largest = parent;
-        if (parent.matches(SEMANTIC_CARD) && ids.length === 1 && parent.querySelector('a[href],img,video')) break;
+  function advertiserAbove(sponsor, card) {
+    for (let scope = sponsor.parentElement; scope && card.contains(scope); scope = scope.parentElement) {
+      const preceding = [...scope.querySelectorAll('a,h1,h2,h3,h4,h5,h6,strong,b,span,div,p')].filter((node) => {
+        const name = normalized(node);
+        return !node.contains(sponsor) && visible(node) &&
+          Boolean(node.compareDocumentPosition(sponsor) & Node.DOCUMENT_POSITION_FOLLOWING) &&
+          name.length >= 2 && name.length <= 200 && /[\p{L}]/u.test(name) &&
+          !isSponsored(node) && !isDetails(node) && !matchesIds(node).length &&
+          !/^(active|inactive|aktif|etkin|started running)/i.test(name) &&
+          ![...node.children].some((child) => normalized(child) === name);
+      });
+      const node = preceding.at(-1);
+      if (node) {
+        const anchor = node.closest('a[href]') || node.querySelector('a[href]');
+        return { name: normalized(node), url: anchor && card.contains(anchor) ? safeUrl(anchor.href) : null, node };
       }
-      if (largest) pool.add(largest);
+      if (scope === card) break;
     }
-    const cache = new WeakMap();
-    function evidence(card) {
-      if (cache.has(card)) return cache.get(card);
-      const ids = cardIds(card);
-      const text = textOf(card);
-      const hasMessage = Boolean(card.querySelector(MESSAGE_SELECTOR));
-      const links = [...card.querySelectorAll('a[href]')].map((link) => safeUrl(link.href)).filter(Boolean);
-      const hasMedia = Boolean(card.querySelector('img,video'));
-      const hasStatus = /(?:Started running|Active|Inactive|Yayınlanmaya başla|Aktif|Etkin)/i.test(text);
-      const semantic = card.matches(SEMANTIC_CARD);
-      const payload = text.replace(new RegExp(ID_LABEL.source, 'gi'), '').trim();
-      const enoughContent = payload.length >= 15;
-      // A bare border, ID badge, navigation or image alone is not an advertisement.
-      const supported = visible(card) && ids.length <= 1 && ((ids.length === 1 && payload.length > 0) ||
-        ((hasMessage || enoughContent) && (links.length > 0 || hasMedia) && (semantic || hasMessage || hasStatus)));
-      const value = { ids, supported };
-      cache.set(card, value);
-      return value;
+    return null;
+  }
+  function cardHeader(card) {
+    const nodes = [...card.querySelectorAll('*')].filter(visible);
+    const details = nodes.find((node) => isDetails(node) && ![...node.children].some(isDetails));
+    if (!details) return null;
+    for (const sponsor of nodes.filter((node) => isSponsored(node) && ![...node.children].some(isSponsored))) {
+      const advertiser = advertiserAbove(sponsor, card);
+      if (advertiser) return { details, sponsor, advertiser };
     }
-    const candidates = [...pool].filter((card) => evidence(card).supported);
-    // DOM order makes a complete card win over its nested decorative borders.
-    candidates.sort((a, b) => a === b ? 0 : a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
+    return null;
+  }
+  let discovery = { candidates: 0, matched: 0, libraryCodeTexts: 0, version: VERSION };
+  function cards() {
+    // Use minimal matching elements, including labels split across sibling spans.
+    // No generated classes, borders, or semantic article contracts are required.
+    const elements = [...document.body.querySelectorAll('*')].filter((node) =>
+      !node.closest('script,style,noscript') && visible(node));
+    const markers = elements.filter((node) => matchesIds(node).length &&
+      ![...node.children].some((child) => matchesIds(child).length));
     const found = new Map();
-    const accepted = [];
-    for (const card of candidates) {
-      if (accepted.some((other) => other.contains(card))) continue;
-      const own = evidence(card);
-      const descendants = candidates.filter((other) => other !== card && card.contains(other));
-      const branches = descendants.filter((other) => !descendants.some((ancestor) => ancestor !== other && ancestor.contains(other)));
-      if (branches.length > 1 && (!own.ids.length || branches.filter((branch) => branch.matches(SEMANTIC_CARD)).length > 1)) continue;
-
-      const id = own.ids[0] || fingerprint(card);
-      if (!found.has(id)) { found.set(id, card); accepted.push(card); }
+    let candidates = 0;
+    for (const marker of markers) {
+      for (const match of matchesIds(marker)) {
+        const id = match[2];
+        if (found.has(id)) continue;
+        candidates++;
+        for (let card = marker; card && card !== document.body; card = card.parentElement) {
+          // Never use a shared result list to supply another ad's button/header.
+          const ids = new Set(matchesIds(card).map((item) => item[2]));
+          if (ids.size !== 1 || !ids.has(id)) break;
+          const header = cardHeader(card);
+          if (header) { found.set(id, { element: card, header }); break; }
+        }
+      }
     }
-    discovery = { candidates: pool.size, matched: found.size, selectors: counts, version: VERSION };
+    const textNodes = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const text = [];
+    let node;
+    while ((node = textNodes.nextNode())) if (!node.parentElement.closest('script,style,noscript')) text.push(node.textContent);
+    discovery = { candidates, matched: found.size,
+      libraryCodeTexts: (text.join(' ').match(/Kütüphane\s+Kodu/gi) || []).length, version: VERSION };
     return found;
   }
-
-  function extract(id, card) {
-    const links = [...new Set([...card.querySelectorAll('a[href]')].map((a) => safeUrl(a.href)).filter(Boolean))];
-    const advertiserLink = [...card.querySelectorAll('a[href]')].find((a) => {
-      const url = safeUrl(a.href);
-      const host = url ? new URL(url).hostname : '';
-      return textOf(a) && url && (host === 'facebook.com' || host.endsWith('.facebook.com')) && !url.includes('/ads/library') && !url.includes('/help/');
+  function startDate(raw) {
+    const months = { january:1, jan:1, february:2, feb:2, march:3, mar:3, april:4, apr:4, may:5, june:6, jun:6, july:7, jul:7, august:8, aug:8, september:9, sep:9, october:10, oct:10, november:11, nov:11, december:12, dec:12,
+      ocak:1, şubat:2, mart:3, nisan:4, mayıs:5, haziran:6, temmuz:7, ağustos:8, eylül:9, ekim:10, kasım:11, aralık:12 };
+    let match = raw.match(/(\d{1,2})\s+([\p{L}]+)\s+(\d{4})\s+(?:tarihinde\s+)?yayınlanmaya başladı/iu) ||
+      raw.match(/Started running on\s+(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/i);
+    if (!match) {
+      const us = raw.match(/Started running on\s+([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/i);
+      if (us) match = [us[0], us[2], us[1], us[3]];
+    }
+    if (!match) return null;
+    const month = months[match[2].toLocaleLowerCase('tr-TR')] || months[match[2].toLowerCase()];
+    const year = Number(match[3]), day = Number(match[1]);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return month && year >= 2000 && date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? date.toISOString().slice(0, 10) : null;
+  }
+  function extract(id, record) {
+    const { element: card, header } = record;
+    const rawText = textOf(card);
+    const links = [...new Set([...card.querySelectorAll('a[href]')].map((node) => safeUrl(node.href)).filter(Boolean))];
+    const clone = card.cloneNode(true);
+    const originals = [card, ...card.querySelectorAll('*')];
+    const copies = [clone, ...clone.querySelectorAll('*')];
+    // Extract text after the sponsored header, excluding controls and metadata.
+    const sponsorIndex = originals.indexOf(header.sponsor);
+    const remove = new Set();
+    originals.forEach((node, index) => {
+      if ((index < sponsorIndex && !node.contains(header.sponsor)) || node === header.sponsor ||
+          isDetails(node) || /^(Platforms?|Platformlar|Active|Inactive|Aktif|Etkin)$/i.test(normalized(node)) ||
+          (matchesIds(node).length && ![...node.children].some((child) => matchesIds(child).length))) remove.add(copies[index]);
     });
-    return {
-      id, libraryId: /^\d+$/.test(id) ? id : null, identitySource: id.startsWith('dom-') ? 'dom-fingerprint' : 'library-id', advertiser: advertiserLink ? textOf(advertiserLink) : null,
-      advertiserUrl: advertiserLink ? safeUrl(advertiserLink.href) : null,
-      text: adText(card), rawText: textOf(card),
+    remove.forEach((node) => node.remove());
+    clone.querySelectorAll('script,style,noscript,button,[role="button"]').forEach((node) => node.remove());
+    // Detached innerText is unreliable; preserve block boundaries explicitly.
+    clone.querySelectorAll('div,p,section,br,li').forEach((node) => node.append(document.createTextNode('\n')));
+    const text = (clone.textContent || '').split('\n').map((line) => line.trim()).filter((line) => line &&
+      !/^(?:\d{1,2}\s+[\p{L}]+\s+\d{4}.*yayınlanmaya başladı|Started running on.*)$/iu.test(line)).join('\n');
+    const platformText = [...card.querySelectorAll('[aria-label],[title]')].map((node) => node.getAttribute('aria-label') || node.getAttribute('title')).join(' ') + ' ' + rawText;
+    const platforms = ['facebook','instagram','messenger','audience network','threads'].filter((name) => new RegExp('(?:^|[^a-z])' + name + '(?:$|[^a-z])', 'i').test(platformText));
+    return { id, libraryId: id, identitySource: 'library-id', advertiser: header.advertiser.name,
+      advertiserUrl: header.advertiser.url, text, rawText, startDate: startDate(rawText), platforms,
       mediaType: card.querySelector('video') ? 'video' : card.querySelector('img') ? 'image' : 'text',
-      libraryUrl: /^\d+$/.test(id) ? `https://www.facebook.com/ads/library/?id=${id}` : null,
-      links,
+      libraryUrl: `https://www.facebook.com/ads/library/?id=${id}`, links,
       destinationUrls: links.filter((href) => { const host = new URL(href).hostname; return host !== 'facebook.com' && !host.endsWith('.facebook.com'); }),
-      images: [...new Set([...card.querySelectorAll('img')].map((img) => safeUrl(img.currentSrc || img.src)).filter(Boolean))],
-      videos: [...new Set([...card.querySelectorAll('video, video source')].map((video) => safeUrl(video.currentSrc || video.src)).filter(Boolean))],
-      platforms: [...new Set([...card.querySelectorAll('[aria-label], [title]')].flatMap((element) => {
-        const label = element.getAttribute('aria-label') || element.getAttribute('title') || '';
-        return /^(facebook|instagram)$/i.test(label) ? [label.toLowerCase()] : [];
-      }))],
-      sourceUrl: location.href, collectedAt: new Date().toISOString()
-    };
+      images: [...new Set([...card.querySelectorAll('img')].map((node) => safeUrl(node.currentSrc || node.src)).filter(Boolean))],
+      videos: [...new Set([...card.querySelectorAll('video,video source')].map((node) => safeUrl(node.currentSrc || node.src)).filter(Boolean))],
+      sourceUrl: location.href, collectedAt: new Date().toISOString() };
   }
 
   async function report(current, finished, reason) {
@@ -224,7 +211,7 @@
         if (idle >= 8) { reason = 'no-new-ads'; break; }
         if (current.stopped) break;
         const firstCard = visibleCards.values().next().value;
-        let scroller = firstCard?.parentElement;
+        let scroller = firstCard?.element.parentElement;
         while (scroller && scroller !== document.body && !(scroller.scrollHeight > scroller.clientHeight + 50 && /auto|scroll/.test(getComputedStyle(scroller).overflowY))) scroller = scroller.parentElement;
         const target = scroller && scroller !== document.body ? scroller : window;
         target.scrollBy({ top: Math.max(500, (target === window ? window.innerHeight : target.clientHeight) * 0.85), behavior: 'instant' });

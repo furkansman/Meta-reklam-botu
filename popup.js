@@ -136,7 +136,7 @@ function renderScan() {
   $('#start-label').textContent = running ? 'Çalışıyor…' : 'Taramayı Başlat';
   renderDateAnalysis();
   const discovery = state.scan?.discovery;
-  $('#scan-diagnostics').textContent = discovery ? `Sayfa betiği v${discovery.version} · ${discovery.candidates} aday / ${discovery.matched} kart` : '';
+  $('#scan-diagnostics').textContent = discovery ? `Sayfa betiği v${discovery.version} · ${discovery.candidates} aday / ${discovery.matched} kart · Kütüphane Kodu: ${discovery.libraryCodeTexts || 0}` : '';
   $('#export-summary').textContent = `${filteredAds().length} / ${state.ads.length} reklam dışa aktarılacak`;
   $('#ad-count').textContent = state.ads.length;
   $('#scroll-count').textContent = state.scrollCount;
