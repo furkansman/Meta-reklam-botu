@@ -111,8 +111,8 @@
     async function owns(sender,message){const state=await read();return Boolean(sender.tab&&state.watchRun?.running&&state.watchRun.active?.tabId===sender.tab.id&&state.watchRun.active.sessionId===message.sessionId);}
     async function content(message,sender){
       const state=await read(),run=state.watchRun,active=run.active;
-      if(sender.frameId!==0||!['SCAN_PROGRESS','META_SCAN_PROGRESS','META_SCAN_FINISHED'].includes(message.type))throw new Error('Geçersiz rakip mesajı.');
-      const incoming=message.type==='SCAN_PROGRESS'?(message.record?[message.record]:[]):message.ads;
+      if(sender.frameId!==0||!['SCAN_PROGRESS','META_SCAN_PROGRESS','META_SCAN_FINISHED','META_SCAN_APPEND'].includes(message.type))throw new Error('Geçersiz rakip mesajı.');
+      const incoming=message.type==='SCAN_PROGRESS'?(message.record?[message.record]:[]):(message.type==='META_SCAN_APPEND'?message.records:message.ads);
       if(!Array.isArray(incoming)||incoming.length>300||incoming.some(ad=>!/^\d{10,}$/.test(ad?.id||'')))throw new Error('Geçersiz rakip reklam verisi.');
       active.seen=Math.max(active.seen,typeof message.ads==='number'?message.ads:incoming.length);
       const accepted=incoming.filter(ad=>matches(ad,active.brand)).map(compactAd);

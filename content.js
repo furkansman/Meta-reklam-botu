@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const VERSION = '0.8.0';
+  const VERSION = '0.9.0';
   if (globalThis.__metaAdCollector?.version === VERSION) return;
   // A previous boolean guard belongs to an older, non-disposable collector.
   if (globalThis.__metaAdCollector === true) return;
@@ -65,42 +65,59 @@
     return null;
   }
   let discovery = { candidates: 0, matched: 0, libraryCodeTexts: 0, version: VERSION };
-  function cards() {
-    // Use minimal matching elements, including labels split across sibling spans.
-    // No generated classes, borders, or semantic article contracts are required.
-    const elements = [...document.body.querySelectorAll('*')].filter((node) =>
-      !node.closest('script,style,noscript') && visible(node));
-    const markers = elements.filter((node) => matchesIds(node).length &&
-      ![...node.children].some((child) => matchesIds(child).length));
-    const found = new Map();
-    let candidates = 0;
-    for (const marker of markers) {
-      for (const match of matchesIds(marker)) {
-        const id = match[2];
-
-        candidates++;
-        for (let card = marker; card && card !== document.body; card = card.parentElement) {
-          // Never use a shared result list to supply another ad's button/header.
-          const ids = new Set(matchesIds(card).map((item) => item[2]));
-          if (ids.size !== 1 || !ids.has(id)) break;
-          const header = cardHeader(card);
-          if (header) {
-            if(session && /birden fazla versiyonu var|multiple versions|several versions/i.test(textOf(card))){
-              let ids=session.versionElements.get(card);if(!ids){ids=new Set();session.versionElements.set(card,ids);}
-              if(!ids.has(id)){ids.add(id);session.versionEncounters++;}
+  function createIndex(current) {
+    const roots=new Set([document.body]),ready=new Map(),processed=new WeakSet(),elementIds=new WeakMap(),labels=new WeakSet();
+    let lastCard=null;
+    function enqueue(node){
+      const element=node.nodeType===Node.ELEMENT_NODE?node:node.parentElement;
+      if(!element||element.closest('script,style,noscript'))return;
+      for(let old=element,i=0;old&&old!==document.body&&i<20;old=old.parentElement,i++){const prior=current.lightened.get(old);if(prior&&old.style.contentVisibility==='hidden'){old.style.contentVisibility=prior.visibility;old.style.containIntrinsicSize=prior.size;}}
+      let scope=element;
+      for(let i=0;i<8&&scope.parentElement&&scope.parentElement!==document.body;i++){
+        const parent=scope.parentElement;if(parent.matches('main,[role="main"]'))break;
+        const text=parent.textContent||'';if(text.length>20000)break;
+        const ids=new Set([...text.matchAll(new RegExp(ID_LABEL.source,ID_LABEL.flags))].map(match=>match[2]));
+        if(ids.size!==1)break;scope=parent;
+      }
+      if([...roots].some(root=>root.contains(scope)))return;
+      for(const root of roots)if(scope.contains(root))roots.delete(root);
+      roots.add(scope);
+    }
+    const observer=new MutationObserver(records=>{for(const record of records){if(record.type==='characterData')enqueue(record.target);else for(const node of record.addedNodes)enqueue(node);}if(wake)wake();});
+    observer.observe(document.body,{childList:true,subtree:true,characterData:true});
+    function drain(){
+      for(const root of roots){
+        if(!root.isConnected)continue;
+        const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let node;
+        while((node=walker.nextNode())){
+          if(node.parentElement.closest('script,style,noscript'))continue;
+          if(/Kütüphane\s+Kodu/i.test(node.textContent)&&!labels.has(node)){labels.add(node);discovery.libraryCodeTexts++;}
+          // Header result estimates are read once from new text, never body.innerText.
+          const estimate=node.textContent.match(/(?:[~≈]\s*)?(\d+(?:[.,\u00a0 ]\d{3})*)\s*(?:sonuç|results)(?![\p{L}])/iu);
+          if(estimate)current.reportedTotal=Number(estimate[1].replace(/[^\d]/g,''));
+          if(!/Kütüphane|Library/i.test(node.textContent))continue;
+          let marker=node.parentElement;
+          for(let i=0;i<3&&marker&&![...String(marker.textContent).matchAll(new RegExp(ID_LABEL.source,ID_LABEL.flags))].length;i++)marker=marker.parentElement;
+          if(!marker||marker===document.body)continue;
+          for(const match of String(marker.textContent).matchAll(new RegExp(ID_LABEL.source,ID_LABEL.flags))){
+            const id=match[2];if(current.ids.has(id))continue;
+            discovery.candidates++;
+            for(let card=marker;card&&card!==document.body;card=card.parentElement){
+              const ids=new Set([...String(card.textContent).matchAll(new RegExp(ID_LABEL.source,ID_LABEL.flags))].map(item=>item[2]));
+              if(ids.size!==1||!ids.has(id))break;
+              const header=cardHeader(card);
+              if(header){
+                if(!processed.has(card)||elementIds.get(card)!==id){ready.set(id,{element:card,header});lastCard=card;}
+                break;
+              }
             }
-            if(!found.has(id))found.set(id, { element: card, header }); break;
           }
         }
       }
+      roots.clear();discovery.matched=current.ads.size+ready.size;
+      return ready;
     }
-    const textNodes = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-    const text = [];
-    let node;
-    while ((node = textNodes.nextNode())) if (!node.parentElement.closest('script,style,noscript')) text.push(node.textContent);
-    discovery = { candidates, matched: found.size,
-      libraryCodeTexts: (text.join(' ').match(/Kütüphane\s+Kodu/gi) || []).length, version: VERSION };
-    return found;
+    return {drain,mark(card,id){processed.add(card);elementIds.set(card,id);},get lastCard(){return lastCard;},dispose(){observer.disconnect();roots.clear();ready.clear();}};
   }
   function callToAction(card, sponsor) {
     const candidates = [...card.querySelectorAll('button,[role="button"],a[href]')].filter((node) => {
@@ -165,75 +182,73 @@
       libraryUrl: `https://www.facebook.com/ads/library/?id=${id}`, collectedAt: new Date().toISOString() };
   }
 
-  async function liveProgress(current, status = 'scanning', record = null) {
-    const response = await chrome.runtime.sendMessage({ type:'SCAN_PROGRESS', record, ads:current.ads.size,
-      scrolls:current.scrollCount, status, reportedTotal:current.reportedTotal??null, versionEncounters:current.versionEncounters, recoveryRound:current.recoveryRound||0, sessionId:current.sessionId });
-    if (!response?.ok) throw new Error(response?.error || 'Canlı sayaç güncellenemedi.');
-    if(!response.competitor)await chrome.storage.session.set({ scanProgress:response.progress });
+  async function liveProgress(current,status='scanning') {
+    if(Date.now()-current.lastProgress<500){current.pendingStatus=status;if(!current.progressTimer)current.progressTimer=setTimeout(()=>{current.progressTimer=null;void liveProgress(current,current.pendingStatus).catch(()=>{});},500-(Date.now()-current.lastProgress));return;}
+    current.lastProgress=Date.now();
+    const response=await chrome.runtime.sendMessage({type:'SCAN_PROGRESS',ads:current.ads.size,scrolls:current.scrollCount,status,reportedTotal:current.reportedTotal??null,versionEncounters:current.versionEncounters,recoveryRound:current.recoveryRound||0,sessionId:current.sessionId});
+    if(!response?.ok)throw new Error(response?.error||'Canlı sayaç güncellenemedi.');
+    if(!response.competitor)await chrome.storage.session.set({scanProgress:response.progress});
   }
-  async function report(current, finished, reason) {
-    const response = await chrome.runtime.sendMessage({ type: finished ? 'META_SCAN_FINISHED' : 'META_SCAN_PROGRESS',
-      sessionId: current.sessionId, ads: [...current.ads.values()], scrollCount: current.scrollCount, reason, discovery });
-    if (!response?.ok) throw new Error(response?.error || 'Tarama durumu kaydedilemedi.');
+  async function flush(current,finished=false,reason='running'){
+    while(current.pending.length){
+      const records=current.pending.slice(0,25);
+      const response=await chrome.runtime.sendMessage({type:'META_SCAN_APPEND',sessionId:current.sessionId,records,batchId:`${current.sessionId}:${current.savedCount}`,scrollCount:current.scrollCount,discovery:{...discovery,reportedTotal:current.reportedTotal??null,versionEncounters:current.versionEncounters,recoveryRound:current.recoveryRound||0,speed:current.speed||null,slow:current.slow||false,scrollY:window.scrollY}});
+      if(!response?.ok)throw new Error(response?.error||'Reklam paketi kaydedilemedi.');
+      current.pending.splice(0,records.length);current.savedCount+=records.length;
+    }
+    if(finished){const response=await chrome.runtime.sendMessage({type:'META_SCAN_FINISHED',sessionId:current.sessionId,ads:[...current.ads.values()],scrollCount:current.scrollCount,reason,discovery:{...discovery,reportedTotal:current.reportedTotal??null,versionEncounters:current.versionEncounters,speed:current.speed||null,slow:current.slow||false,scrollY:window.scrollY}});if(!response?.ok)throw new Error(response?.error||'Tarama sonlandırılamadı.');}
   }
-
-  function waitUntil(current,predicate,timeout) {
-    return new Promise((resolve)=>{
-      let timer,observer,debounce,done=false;
-      const finish=()=>{if(done)return;done=true;clearTimeout(timer);clearTimeout(debounce);observer?.disconnect();if(wake===finish)wake=null;resolve();};
-      wake=finish;
+  function waitUntil(current,predicate,timeout){
+    return new Promise(resolve=>{
+      let done=false;const finish=()=>{if(done)return;done=true;clearTimeout(timer);if(wake===check)wake=null;resolve();};
       const check=()=>{if(current.stopped||location.href!==current.url||predicate())finish();};
-      observer=new MutationObserver(()=>{clearTimeout(debounce);debounce=setTimeout(check,50);});
-      observer.observe(document.body,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:['class','style','hidden','aria-hidden','aria-busy']});
-      timer=setTimeout(finish,timeout);check();
+      const timer=setTimeout(finish,timeout);wake=check;check();
     });
   }
-  function scanMetadata(current) {
-    const page=textOf(document.body);
-    const matches=[...page.matchAll(/(?:[~≈]\s*)?(\d+(?:[.,\u00a0 ]\d{3})*)\s*(?:sonuç|results)(?![\p{L}])/giu)];
-    const estimate=matches.map(match=>Number(match[1].replace(/[^\d]/g,''))).find(Number.isSafeInteger);
-    if(estimate!==undefined)current.reportedTotal=estimate;
-    return {reportedTotal:current.reportedTotal??null,versionEncounters:current.versionEncounters,recoveryRound:current.recoveryRound||0};
+  function lighten(current,card){
+    current.recent.push(card);
+    // Preserve React's DOM and measured list height; only skip old offscreen rendering.
+    if(current.recent.length>100){const old=current.recent.shift();if(old.isConnected){const prior=current.lightened.get(old)||{visibility:old.style.contentVisibility,size:old.style.containIntrinsicSize};current.lightened.set(old,prior);current.styles.push({node:new WeakRef(old),...prior});const height=Math.max(600,old.getBoundingClientRect().height);old.style.containIntrinsicSize=`0px ${height}px`;old.style.contentVisibility='hidden';}}
+    for(const video of card.querySelectorAll('video')){try{video.pause();video.preload='none';}catch{}}
   }
-  function scrollTarget(records) {
-    let node=records.values().next().value?.element.parentElement;
-    while(node&&node!==document.body&&!(node.scrollHeight>node.clientHeight+50&&/auto|scroll/.test(getComputedStyle(node).overflowY)))node=node.parentElement;
-    return node&&node!==document.body?node:window;
-  }
-  async function run(current) {
-    let reason='stopped';
-    const metadata=()=>{Object.assign(discovery,scanMetadata(current));};
+  async function run(current){
+    let reason='stopped';discovery={candidates:0,matched:0,libraryCodeTexts:0,version:VERSION};
+    const index=createIndex(current);current.index=index;
     const collect=async()=>{
       const before=current.ads.size;
-      metadata();
-      for(const [id,record] of cards()){
-        if(current.ads.has(id)||current.ads.size>=current.settings.maxAds)continue;
-        const ad=extract(id,record);current.ads.set(id,ad);
-        await liveProgress(current,'scanning',ad);
-        if(current.ads.size-current.savedCount>=25){await report(current,false,'running');current.savedCount=current.ads.size;}
+      for(const [id,record]of index.drain()){
+        if(current.ids.has(id)){index.drain().delete(id);continue;}
+        if(current.ads.size>=current.settings.maxAds)break;
+        const ad=extract(id,record);current.ids.add(id);current.ads.set(id,ad);current.pending.push(ad);index.mark(record.element,id);
+        if(/birden fazla versiyonu var|multiple versions|several versions/i.test(record.element.textContent||''))current.versionEncounters++;
+        lighten(current,record.element);index.drain().delete(id);
+        if((current.ads.size-current.initialCount)%50===0){const elapsed=Math.max(.001,(performance.now()-current.speedAt)/1000);current.speed=3000/elapsed;current.baselineSpeed??=current.speed;current.slow=current.speed<current.baselineSpeed*.3;current.speedAt=performance.now();}
+        if(current.pending.length>=25)await flush(current);
+        await liveProgress(current);
+        if(current.settings.autoRefresh&&current.ads.size>=current.nextRefresh&&current.ads.size<current.settings.maxAds){
+          await flush(current);current.refreshing=true;const response=await chrome.runtime.sendMessage({type:'SCAN_REFRESH',sessionId:current.sessionId,scrollY:window.scrollY,scrollCount:current.scrollCount});
+          if(!response?.ok){current.refreshing=false;throw new Error(response?.error||'Otomatik yenileme başlatılamadı.');}current.refreshing=true;current.stopped=true;break;
+        }
       }
-      // Also checkpoint each completed DOM pass; partial passes still save every 25.
       if(current.ads.size>before)current.recoveryRound=0;
-      metadata();await report(current,false,'running');current.savedCount=current.ads.size;await liveProgress(current);
+      await liveProgress(current);
     };
-    const waitForNew=(timeout)=>waitUntil(current,()=>[...cards().keys()].some(id=>!current.ads.has(id)),timeout);
+    const waitForNew=timeout=>waitUntil(current,()=>index.drain().size>0,timeout);
     try{
-      if(!cards().size)await waitForNew(12000);
-      reason=await ScanLoop.run(current.settings,{
-        stopped:()=>current.stopped||!onLibrary()||location.href!==current.url,
-        count:()=>current.ads.size,collect,waitForNew,
-        scroll:async()=>{const target=scrollTarget(cards());target.scrollBy({top:Math.max(500,(target===window?innerHeight:target.clientHeight)*({slow:.6,medium:.85,fast:1.2}[current.settings.speed])),behavior:'instant'});current.scrollCount++;await liveProgress(current);},
-        recovery:async(round)=>{current.recoveryRound=round;metadata();await liveProgress(current);await report(current,false,'running');},
-        clickMore:async()=>{const button=[...document.querySelectorAll('button,[role="button"],a')].find(node=>visible(node)&&/^(daha fazla göster|daha çok göster|see more|load more|show more)$/i.test(normalized(node)));button?.click();},
-        bounce:async()=>{const target=scrollTarget(cards());target.scrollBy({top:-600,behavior:'instant'});target.scrollTo({top:target===window?document.scrollingElement.scrollHeight:target.scrollHeight,behavior:'instant'});current.scrollCount+=2;await liveProgress(current);},
-        waitSpinner:(timeout)=>waitUntil(current,()=>![...document.querySelectorAll('[role="progressbar"],[aria-busy="true"],[aria-label*="loading" i],[aria-label*="yüklen" i],[class*="spinner" i]')].some(visible),timeout)
+      if(!index.drain().size)await waitForNew(12000);
+      reason=await ScanLoop.run(current.settings,{stopped:()=>current.stopped||!onLibrary()||location.href!==current.url,count:()=>current.ads.size,collect,waitForNew,
+        scroll:async()=>{window.scrollTo(0,document.body.scrollHeight);current.scrollCount++;await liveProgress(current);},
+        recovery:async round=>{current.recoveryRound=round;await flush(current);await liveProgress(current);},
+        clickMore:async()=>{[...document.querySelectorAll('button,[role="button"],a')].find(node=>visible(node)&&/^(daha fazla göster|daha çok göster|see more|load more|show more)$/i.test(normalized(node)))?.click();},
+        bounce:async()=>{window.scrollBy(0,-600);window.scrollTo(0,document.body.scrollHeight);current.scrollCount+=2;await liveProgress(current);},
+        waitSpinner:timeout=>waitUntil(current,()=>![...document.querySelectorAll('[role="progressbar"],[aria-busy="true"],[aria-label*="loading" i],[aria-label*="yüklen" i],[class*="spinner" i]')].some(visible),timeout)
       });
       if(location.href!==current.url)reason='page-changed';
     }catch(error){console.warn('Meta Reklam Botu: tarama durdu.',error);reason='error';}
     finally{
-      metadata();
-      try{await liveProgress(current,['limit','visible-complete','no-new-ads','meta-exhausted'].includes(reason)?'completed':'stopped');}catch{}
-      try{await report(current,true,reason);}catch(error){console.warn('Meta Reklam Botu: son kayıt gönderilemedi.',error);}
+      clearTimeout(current.progressTimer);index.dispose();
+      if(!current.refreshing)try{await flush(current,true,reason);}catch(error){console.warn('Meta Reklam Botu: son kayıt gönderilemedi.',error);}
+      for(const style of current.styles){const card=style.node.deref();if(card?.isConnected){card.style.contentVisibility=style.visibility;card.style.containIntrinsicSize=style.size;}}
       if(session===current)session=null;
     }
   }
@@ -257,9 +272,10 @@
           !Object.hasOwn(DELAYS, settings.speed) || typeof settings.autoScroll !== 'boolean' || !Number.isInteger(tabId) || typeof sessionId !== 'string') {
         throw new Error('Tarama ayarları geçersiz.');
       }
-      const current = { settings, tabId, sessionId, ads: new Map(resumeAds.map(ad=>[ad.id,ad])), savedCount:resumeAds.length, versionElements:new WeakMap(), versionEncounters:resumeVersionEncounters, reportedTotal:resumeReportedTotal, scrollCount:resumeScrolls, startedAt: Date.now(), url: location.href, stopped: false };
+      const current = { settings, tabId, sessionId, ads: new Map(resumeAds.map(ad=>[ad.id,ad])), savedCount:resumeAds.length, ids:new Set(resumeAds.map(ad=>ad.id)),pending:[],recent:[],styles:[],lightened:new WeakMap(),lastProgress:0,speedAt:performance.now(),initialCount:resumeAds.length,nextRefresh:(Math.floor(resumeAds.length/300)+1)*300,versionElements:new WeakMap(), versionEncounters:resumeVersionEncounters, reportedTotal:resumeReportedTotal, scrollCount:resumeScrolls, startedAt: Date.now(), url: location.href, stopped: false };
       session = current;
       respond({ ok: true });
+      if(message.scrollY)window.scrollTo(0,message.scrollY);
       void run(current);
     })().catch((error) => respond({ ok: false, error: error.message }));
     return true;

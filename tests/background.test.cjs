@@ -11,24 +11,25 @@ function harness(shared = {}) {
   const sessions = shared.sessions || new Map();
   const sessionStore = shared.sessionStore || {};
   const events = {};
-  const requests = [];
+  const requests = [];const tabMessages=[];
   let apiStatus = 200, apiDescription='',writeError=false;
   const event = (name) => ({ addListener(fn) { events[name] = fn; } });
   let activeTab = { id: 7, url };
-  let failStart = false, failQuota = false, collectorVersion = '0.8.0';
+  let failStart = false, failQuota = false, collectorVersion = '0.9.0';
   const chrome = {
     runtime: { id: 'test', async sendMessage() {}, getURL: (path) => `chrome-extension://test/${path}`, onMessage: event('message'),
       onStartup: event('startup'), onInstalled: event('installed') },
     scripting: { async executeScript() {} },
     alarms: { async create() {}, onAlarm: event('alarm') },
     storage: { session: { async setAccessLevel() {}, async get(keys) { if (typeof keys === 'string') keys=[keys]; return structuredClone(Object.fromEntries(keys.filter(key=>key in sessionStore).map(key=>[key,sessionStore[key]]))); }, async set(values) { Object.assign(sessionStore,structuredClone(values)); } }, local: {
-      async setAccessLevel() {},
+      async setAccessLevel() {},async remove(keys){for(const key of keys)delete store[key];},
       async get(keys) { if (typeof keys === 'string') keys = [keys]; return structuredClone(Object.fromEntries(keys.filter((key) => key in store).map((key) => [key, store[key]]))); },
       async set(values) { if(writeError&&values.telegramConfig)throw new Error('Yerel kayıt yazılamadı.'); if (failQuota && values.ads?.some((ad) => ad.large)) throw new Error('QUOTA'); Object.assign(store, structuredClone(values)); }
     } },
     tabs: {
       async query() { return [activeTab]; },
-      async sendMessage(tabId, msg) {
+      async reload(tabId){sessions.delete(tabId);},
+      async sendMessage(tabId, msg) {tabMessages.push(msg);
         if (msg.type === 'META_SCAN_STATUS') return { running: sessions.has(tabId), sessionId: sessions.get(tabId), version: collectorVersion };
         if (msg.type === 'META_SCAN_START') { if (failStart) throw new Error('No receiver'); sessions.set(tabId, msg.sessionId); }
         if (msg.type === 'META_SCAN_STOP') sessions.delete(tabId);
@@ -36,11 +37,11 @@ function harness(shared = {}) {
       }, onRemoved: event('removed'), onUpdated: event('updated')
     }
   };
-  vm.runInNewContext(source, { chrome, crypto: webcrypto, URL, console, Date, AbortSignal, fetch: async (url, options) => { requests.push({ url, options }); return { ok: apiStatus === 200, status: apiStatus, async json() { return { ok: apiStatus === 200,description:apiDescription }; } }; } });
+  vm.runInNewContext(source, { chrome, crypto: webcrypto, URL, console, Date, AbortSignal, setTimeout, clearTimeout, fetch: async (url, options) => { requests.push({ url, options }); return { ok: apiStatus === 200, status: apiStatus, async json() { return { ok: apiStatus === 200,description:apiDescription }; } }; } });
   const send = (message, sender = { id: 'test', url: 'chrome-extension://test/popup.html' }) => new Promise((resolve) => events.message(message, sender, resolve));
   const progress = (overrides = {}, senderOverrides = {}) => send({ type: 'META_SCAN_PROGRESS', sessionId: store.scan.sessionId,
     ads: [{ id: '12345', text: 'Ad' }], scrollCount: 1, ...overrides }, { id: 'test', tab: { id: 7 }, frameId: 0, url, ...senderOverrides });
-  return { store, sessions, sessionStore, events, send, progress, requests, apiStatus: (status,description='') => { apiStatus = status;apiDescription=description; },writeError:()=>{writeError=true;}, collectorVersion: (version) => { collectorVersion = version; }, setTab: (tab) => { activeTab = tab; }, failStart: () => { failStart = true; }, failQuota: () => { failQuota = true; } };
+  return { store, sessions, sessionStore, tabMessages, events, send, progress, requests, apiStatus: (status,description='') => { apiStatus = status;apiDescription=description; },writeError:()=>{writeError=true;}, collectorVersion: (version) => { collectorVersion = version; }, setTab: (tab) => { activeTab = tab; }, failStart: () => { failStart = true; }, failQuota: () => { failQuota = true; } };
 }
 test('start/progress/stop/finish, single owner and idempotent history', async () => {
   const h = harness();
@@ -160,9 +161,9 @@ test('stale collector is rejected before clearing results; discovery is sanitize
   const response = await h.send({ type: 'START_SCAN', settings });
   assert.equal(response.ok, false); assert.match(response.error, /eski tarama kodu/);
   assert.equal(h.store.ads[0].id, 'previous');
-  h.collectorVersion('0.8.0');
+  h.collectorVersion('0.9.0');
   await h.send({ type: 'START_SCAN', settings });
-  await h.progress({ discovery: { candidates: 12, matched: 1, version: '0.8.0', token: 'private' } });
+  await h.progress({ discovery: { candidates: 12, matched: 1, version: '0.9.0', token: 'private' } });
   assert.equal(h.store.scan.discovery.candidates, 12);
   assert.equal(h.store.scan.discovery.token, undefined);
 });
@@ -214,4 +215,22 @@ test('placeholder and blank reuse saved token; unsaved token test does not repla
  await h.send({type:'TEST_TELEGRAM',token:'........',chatId:'12345'});assert(h.requests.at(-1).url.includes(saved));
  await h.send({type:'TEST_TELEGRAM',token:draft,chatId:'12345'});assert(h.requests.at(-1).url.includes(draft));assert.equal(h.store.telegramConfig.token,saved);
  h.store.telegramConfig.token='legacy-token';assert.equal((await h.send({type:'SAVE_TELEGRAM',token:'',chatId:'12345',enabled:true})).ok,true);
+});
+
+test('append-only batches are idempotent and materialize without rewriting old records',async()=>{
+ const h=harness();await h.send({type:'START_SCAN',settings:{...settings,maxAds:100}});
+ const sessionId=h.store.scan.sessionId;
+ const batch={type:'META_SCAN_APPEND',batchId:sessionId+':0',records:[{id:'123456789012',fullText:'First'}],scrollCount:1,discovery:{candidates:1,matched:1,version:'0.9.0',speed:100,slow:false}};
+ assert.equal((await h.progress(batch)).ok,true);assert.equal(h.store.ads.length,0);
+ await h.progress(batch);assert.equal(h.store.scanBatches.keys.length,1);
+ const state=await h.send({type:'GET_STATE'});assert.equal(state.state.ads.length,1);assert.equal(state.state.ads[0].fullText,'First');
+ await h.progress({type:'META_SCAN_FINISHED',ads:state.state.ads,scrollCount:1,reason:'stopped'});assert.equal(h.store.ads.length,1);assert.equal(h.store.scanBatches,null);
+});
+test('automatic refresh preserves IDs, scroll count and position through navigation',async()=>{
+ const h=harness();await h.send({type:'START_SCAN',settings:{...settings,maxAds:1000,autoRefresh:true}});
+ await h.progress({type:'META_SCAN_APPEND',batchId:h.store.scan.sessionId+':0',records:[{id:'123456789012'}],scrollCount:7});
+ assert.equal((await h.progress({type:'SCAN_REFRESH',scrollY:4200,scrollCount:7})).ok,true);
+ assert(h.store.scan.refreshing);h.events.updated(7,{status:'loading'});await h.send({type:'GET_STATE'});assert(h.store.scan.running);
+ h.events.updated(7,{status:'complete'});await h.send({type:'GET_STATE'});
+ const last=h.tabMessages.filter(msg=>msg.type==='META_SCAN_START').at(-1);assert.equal(last.resumeAds[0].id,'123456789012');assert.equal(last.resumeScrolls,7);assert.equal(last.scrollY,4200);assert.equal(h.store.ads.length,1);assert(!h.store.scan.refreshing);
 });

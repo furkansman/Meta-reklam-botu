@@ -166,11 +166,14 @@ function renderScan() {
   const totals=liveProgress && liveProgress.sessionId===state.scan?.sessionId?liveProgress:discovery;
   $('#meta-totals').textContent=`Meta’nın bildirdiği: ${totals?.reportedTotal!=null?'~'+totals.reportedTotal:'bilinmiyor'} / Toplanan benzersiz: ${(liveProgress && liveProgress.sessionId===state.scan?.sessionId?liveProgress.ads:state.ads.length).toLocaleString('tr-TR')} · Çoklu versiyon karşılaşması: ${totals?.versionEncounters||0}`;
   $('#scan-diagnostics').textContent = discovery ? `Sayfa betiği v${discovery.version} · ${discovery.candidates} aday / ${discovery.matched} kart · Kütüphane Kodu: ${discovery.libraryCodeTexts || 0} · ${completeness}` : completeness;
+  if(discovery?.speed)$('#scan-diagnostics').textContent+=` · Hız: ${Math.round(discovery.speed)} reklam/dk`;
+  if(discovery?.slow)$('#scan-diagnostics').textContent+=" · Sayfa ağırlaştı, 'Devam Et' ile sayfayı yenileyip kaldığın yerden devam edebilirsin";
   $('#export-summary').textContent = `${filteredAds().length} / ${state.ads.length} reklam dışa aktarılacak`;
 
   $('#resume-scan').disabled=!ready||busy||running||!state.ads.length;
   $('#start-scan').disabled = !ready || busy || running;
   $('#stop-scan').disabled = !ready || busy || !running || Boolean(state.scan?.stopping);
+  $('#auto-refresh').disabled=!ready||busy||running;
   $('#auto-scroll').disabled = !ready || busy || running;
   $('#scroll-speed').disabled = !ready || busy || running || !$('#auto-scroll').checked;
   $('#max-ads').disabled = !ready || busy || running;
@@ -188,7 +191,7 @@ $('#scan-form').addEventListener('submit', (event) => {
     feedback('Maksimum reklam sayısı 1–10000 arasında bir tam sayı olmalı.'); return;
   }
   perform(event.submitter, async () => {
-    const settings = { autoScroll: $('#auto-scroll').checked, speed: $('#scroll-speed').value, maxAds };
+    const settings = { autoScroll: $('#auto-scroll').checked, autoRefresh:$('#auto-refresh').checked, speed: $('#scroll-speed').value, maxAds };
     await command('START_SCAN', { settings });
     state.settings = settings;
     await refreshState();
@@ -196,7 +199,7 @@ $('#scan-form').addEventListener('submit', (event) => {
   }).then(renderScan);
 });
 
-$('#resume-scan').addEventListener('click',(event)=>perform(event.currentTarget,async()=>{await command('RESUME_SCAN',{settings:{autoScroll:$('#auto-scroll').checked,speed:$('#scroll-speed').value,maxAds:Number($('#max-ads').value)}});await refreshState();}));
+$('#resume-scan').addEventListener('click',(event)=>perform(event.currentTarget,async()=>{await command('RESUME_SCAN',{settings:{autoScroll:$('#auto-scroll').checked,autoRefresh:$('#auto-refresh').checked,speed:$('#scroll-speed').value,maxAds:Number($('#max-ads').value)}});await refreshState();}));
 
 $('#stop-scan').addEventListener('click', (event) => perform(event.currentTarget, async () => {
   await command('STOP_SCAN');
@@ -353,6 +356,7 @@ async function init() {
     $('#media-type').value = state.filters.mediaType;
     $('#platform').value = state.filters.platform;
     $('#auto-scroll').checked = state.settings.autoScroll;
+    $('#auto-refresh').checked=Boolean(state.settings.autoRefresh);
     $('#scroll-speed').value = state.settings.speed;
     $('#max-ads').value = state.settings.maxAds;
     ready = true;
@@ -362,6 +366,7 @@ async function init() {
 }
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'session' && changes.scanProgress) applyProgress(changes.scanProgress.newValue);
+  if(area==='local'&&changes.scanBatches){refreshState(true).catch(()=>{});return;}
   if (area === 'local' && ['ads', 'scrollCount', 'scan', 'history', 'competitors', 'competitorStats', 'filters', 'telegramStatus','competitorProfiles','watchSettings','watchRun','watchResults','watchReportError','watchSchedule'].some((key) => key in changes)) {
     refreshState().catch(() => feedback('Tarama durumu okunamadı.'));
   }

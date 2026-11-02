@@ -24,23 +24,35 @@ Rakip Takip artık ayrı, kalıcı bir günlük tarama kuyruğu kullanır. Manue
 
 ## Güncel sürümü yükleme
 
-Bu paket **v0.8.0** olarak sürümlenmiştir. `chrome://extensions` üzerinden doğru depo klasöründen yüklenen eklentiyi yenileyin ve açık Meta sekmesini bir kez yeniden yükleyin. Panelin altında v0.8.0 görünmelidir; görünmüyorsa Chrome başka/eski bir klasörü çalıştırıyordur. Worker, eski sayfa betiğini sürüm kontrolüyle saptar ve önceki sonuçları silmeden yenileme ister. Tarama panelindeki aday/kart sayıları güncel betiğin gerçekten hangi kapsayıcıları işlediğini gösterir.
+Bu paket **v0.9.0** olarak sürümlenmiştir. `chrome://extensions` üzerinden doğru depo klasöründen yüklenen eklentiyi yenileyin ve açık Meta sekmesini bir kez yeniden yükleyin. Panelin altında v0.9.0 görünmelidir; görünmüyorsa Chrome başka/eski bir klasörü çalıştırıyordur. Worker, eski sayfa betiğini sürüm kontrolüyle saptar ve önceki sonuçları silmeden yenileme ister. Tarama panelindeki aday/kart sayıları güncel betiğin gerçekten hangi kapsayıcıları işlediğini gösterir.
 
 Kart keşfi artık hiçbir sınıf/border seçicisine dayanmaz. `(Kütüphane Kodu|Library ID)\s*:?\s*(\d{10,})` metninin en küçük eşleşen öğesinden yukarı çıkar; aynı ID ile reklam detayları kontrolünü ve Sponsorlu/Sponsored metninin üstündeki reklamveren adını kapsayan ilk öğeyi seçer. Farklı ID içeren üst sonuç listeleri kart olarak kabul edilmez. Aynı ID bir oturumda yalnızca bir kez saklanır. Türkçe/İngilizce başlangıç tarihleri ISO gün olarak çıkarılır; platform etiketleri ve görsel/video türü de kaydedilir. Eksik tarihler uydurulmaz. Aday/kart teşhisinin yanında sayfadaki “Kütüphane Kodu” metni sayısı gösterilir. Bu kontroller sınıfsız ve rastgele sınıflı DOM örnekleriyle doğrulanmıştır; kullanıcının canlı Meta sayfası bu ortamda incelenmemiştir.
 
 ## Kurtarma, kayıt güvenliği ve devam
 
-Toplanan veriler her 25 yeni reklamda ve her tamamlanan DOM geçişinde `storage.local` içine yazılır. Aradaki onaylanmış kayıtlar worker'ın session tamponunda tutulur; sekme kapanır/yenilenirse worker bunları son kalıcı veriyle birleştirir. Popup kapanması taramayı veya tamponu silmez. Browser'ın tamamen kapanması session alanını temizlediğinden, bu durumda son kalıcı checkpoint geçerlidir.
+Toplanan veriler 25 yeni reklamlık artımlı paketler halinde `storage.local` içinde ayrı anahtarlara yazılır; önceki büyük dizi her pakette yeniden yazılmaz. Paket kimliği idempotenttir, yeniden iletim aynı veriyi çoğaltmaz. Aktif veri okuma/dışa aktarma gerektiğinde paketler birleştirilir; tarama bitişinde son küçük paket de kaydedilip kalıcı sonuç normalleştirilir. Ani manuel sekme kapanması/yenilemesi son henüz gönderilmemiş en fazla 24 kaydı kaybettirebilir; otomatik yenilemeden önce bütün bekleyen kayıtlar onaylı olarak yazılır. Browser tamamen kapanırsa yalnızca tamamlanmış yerel paketler garanti edilir.
 
 **Devam Et** son kalıcı reklam kümesini ve kaydırma sayısını yükleyerek mevcut Meta sekmesinde devam eder; eski ID'ler atlanır. Meta'nın sanallaştırılmış liste konumu otomatik geri getirilemez: sayfa yenilendiyse daha önce yüklenmiş kartların üzerinden geçilmesi gerekebilir. Maksimum sayı kayıtlı reklam sayısından yüksek olmalıdır. Yeni Taramayı Başlat ayrı ve sıfırdan bir taramadır.
 
 Panel `~1.100 sonuç / results` metninden Meta'nın yaklaşık sayısını okur, benzersiz toplanan sayıdan ayrı gösterir. Bu tahmin kesin hedef veya tüm kayıtların erişilebilirlik garantisi değildir. “Birden fazla versiyonu var / multiple versions” etiketi taşıyan kartların her ayrı DOM gösterimi bir karşılaşma sayılır; aynı DOM öğesinin tekrar kontrolü sayılmaz. Bu değer gerçek versiyon adedinin tahmini değildir ve devam edilen yeni sayfa gösterimleri yeni karşılaşma sayılabilir.
 
+## Artımlı tarama ve sayfa yükü
+
+İlk DOM geçişinden sonra `MutationObserver` yalnızca eklenen düğüm alt ağaçlarını ve değişen metin düğümlerini kuyruğa alır. Her kaydırmada tüm kartlar veya `body.innerText` yeniden okunmaz. İşlenmiş kartlar WeakSet/WeakMap, benzersiz Reklam ID'leri Set/Map ile takip edilir. Meta aynı DOM öğesini başka bir ID için geri dönüştürürse yeni ID işlenebilir. Eksik yüklenmiş kartlar ilgili alt ağaç değiştiğinde yeniden aday olur.
+
+Son 100 karttan eski kartlarda boyut korunarak `content-visibility:hidden` uygulanır; videolar duraklatılır. Kartlar DOM'dan silinmez. Eski DOM düğümlerinin liste sanallaştırmasıyla atılmasını engellememek için hafifletme geçmişi WeakRef kullanır. Tarama durunca stiller geri alınır; geri dönüştürülmüş bir kart değiştiğinde görünürlüğü açılır. Normal kaydırma `window.scrollTo(0, document.body.scrollHeight)` kullanır. DOM beklemesi en fazla 4 saniyedir; yeni kart gelince erken devam edilir.
+
+Kayıt paketi 25 reklamdır; SCAN_PROGRESS içerik ve worker yayınlarında en fazla saniyede 2 kez gönderilir (son değer birleştirilir). Her 50 yeni reklamda son 50 için reklam/dakika ölçülür. İlk 50'lik pencereye göre hız %70'ten fazla düşerse teşhiste Devam Et önerisi gösterilir. Ölçüm ağ/Meta yükleme beklemesini de kapsar; yalnızca CPU performans puanı değildir.
+
+**Ağırlaşınca otomatik yenile (300 reklamda bir)** seçeneği açıksa her 300 benzersiz kayıtta (maksimum hedefe henüz ulaşılmadıysa) ID'ler/veri, sayaç ve scroll konumu kaydedilip aynı sekme yenilenir. Worker yükleme tamamlandığında yeni oturum kimliğiyle kayıtlı ID'leri ve sayaçları motora geri verir; eski ID'ler tekrar eklenmez. Pozisyon Meta liste yüksekliği elverdiğince geri yüklenir. Yeniden bağlanma başarısızsa 60 saniyelik gözetim kaydı koruyarak taramayı durdurur. Yavaşlama uyarısından sonra manuel Devam Et de sayfayı yeniler.
+
+Kontrollü tarayıcı testi 110 kart sonrası eklenen tek düğümde eski kart/body innerText okumalarının artmadığını, 25'lik paketleri, mesaj aralıklarını, hız uyarısını ve 300 ID'den yenileme sonrası 301'e devam etmeyi doğrular. Kullanıcının canlı Meta sayfasında ölçüm yapılmadı.
+
 ## Canlı durum barı
 
 Tarama sekmesinin en üstündeki sticky bar, 40 px kalın sayaçlarla reklam/scroll sayılarını ve Hazır, Taranıyor…, Durduruldu, Tamamlandı durumlarını gösterir. Nokta yalnızca tarama sırasında pulse yapar; sayaç değişiminde kısa tık animasyonu olur. Azaltılmış hareket tercihi iki animasyonu da kapatır. Sayılar `tr-TR` biçimindedir. `ad-count`, `scroll-count`, `scan-status` ID'leri korunmuştur; eski `.counter-grid` kaldırılmıştır.
 
-Content script her yeni reklam ve her scroll sonrasında `{type: "SCAN_PROGRESS", ads, scrolls, status, sessionId}` gönderir. Worker sekme/oturum sahipliğini ve monoton sayaçları doğrular, session kaydını sürümleyerek popup'a iletir; content script de onaylanan sayıları `chrome.storage.session.scanProgress` içine yazar. Popup açıldığında session verisini okur ve aktif oturumu doğrular; pencerenin kapanması açık Meta sekmesindeki taramayı durdurmaz. Yeni tarama ve Temizle sayaçları sıfırlar. Maksimuma ulaşıldığında Tamamlandı gösterilir. Geç veya eski oturuma ait mesajlar taramayı yeniden başlatmaz.
+Content script yeni reklam/scroll ilerlemesini birleştirerek en fazla 500 ms’de bir `{type: "SCAN_PROGRESS", ads, scrolls, status, sessionId}` gönderir. Worker sekme/oturum sahipliğini ve monoton sayaçları doğrular, session kaydını sürümleyerek popup'a iletir; content script de onaylanan sayıları `chrome.storage.session.scanProgress` içine yazar. Popup açıldığında session verisini okur ve aktif oturumu doğrular; pencerenin kapanması açık Meta sekmesindeki taramayı durdurmaz. Yeni tarama ve Temizle sayaçları sıfırlar. Maksimuma ulaşıldığında Tamamlandı gösterilir. Geç veya eski oturuma ait mesajlar taramayı yeniden başlatmaz.
 
 Session alanı yalnızca bu genel sayaçlar için content script erişimine açılmıştır; Telegram sırları güvenilen bağlamlara özel `storage.local` içinde kalır. Browser oturumu sona ererse `storage.session` Chrome tarafından temizlenir; worker son kalıcı tarama durumunu yerelden yeniden oluşturur.
 
@@ -79,7 +91,7 @@ Test mesajı, yeni token/Chat ID girildiyse bunları kaydetmeden dener; aksi hal
 - Bütün markalardan sonra tek mantıksal Telegram raporu hazırlanır: marka başına en fazla 5 yeni Hook ve link, fazlasının adedi, hata veren markalar ve toplam etkilenen marka sayısı. 4000 karakteri aşarsa parçalanır. **Yeni reklam yoksa da mesaj gönder** kapalıysa, değişiklik/ilk kayıt/hata olmayan tur sessiz kalır.
 - Telegram kapalıysa veya gönderim hatalıysa rakip analizi yine saklanır, Türkçe hata Rakip Takip sekmesinde gösterilir. Gönderim sırasında browser'ın kapanması nadiren aynı rapor parçasını tekrar gönderebilir (Telegram'ın idempotency anahtarı yoktur). Günlük izleme için Chrome açık ve Meta oturumu erişilebilir olmalıdır. Bildirim izni reddedilirse kaçırılmış tarama düğmesi popup'ta kalır.
 
-`competitor.js` bu kuyruğu bağımsız yönetir. `content.js` motoruna yalnızca rakip mesajlarının manuel sayaç session kaydına yazılmasını engelleyen tek satır kontrol eklendi; tarama döngüsü, Hook/CSV-XLSX şeması ve sayaç barı algoritması değiştirilmedi. Yeni `notifications` izni ve `icon.png`, kaçırılmış günlük tarama bildirimi içindir. Harici ses/yapay zekâ API'si kullanılmaz.
+`competitor.js` bu kuyruğu bağımsız yönetir. Rakip mesajları manuel sayaç session kaydına yazılmaz; rakipler de artımlı paketleri kabul eder. Hook/CSV-XLSX şeması ve sayaç barının görünümü korunur. Yeni `notifications` izni ve `icon.png`, kaçırılmış günlük tarama bildirimi içindir. Harici ses/yapay zekâ API'si kullanılmaz.
 
 ## Telegram bildirimleri
 

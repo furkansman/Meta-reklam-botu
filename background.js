@@ -23,7 +23,8 @@ function enqueue(task) {
   return result;
 }
 async function readState() {
-  const saved = await chrome.storage.local.get([...Object.keys(DEFAULTS),'telegramConfig']);
+  const saved = await chrome.storage.local.get([...Object.keys(DEFAULTS),'telegramConfig','scanBatches']);
+  if(saved.scanBatches?.keys?.length){const chunks=await chrome.storage.local.get(saved.scanBatches.keys);saved.ads=[...new Map([...(saved.ads||[]),...saved.scanBatches.keys.flatMap(key=>chunks[key]||[])].map(ad=>[ad.id,ad])).values()];}
   const config=saved.telegramConfig;delete saved.telegramConfig;
   if(config)saved.telegramStatus={enabled:Boolean(config.enabled),tokenConfigured:Boolean(config.token),tokenSuffix:config.token?.slice(-4)||'',chatId:config.chatId||''};
   return { ...DEFAULTS, ...saved };
@@ -37,11 +38,13 @@ function validateSettings(settings) {
       !Number.isInteger(settings.maxAds) || settings.maxAds < 1 || settings.maxAds > 10000) {
     throw new Error('Tarama ayarları geçersiz.');
   }
-  return { autoScroll: settings.autoScroll, speed: settings.speed, maxAds: settings.maxAds };
+  return { autoScroll: settings.autoScroll, speed: settings.speed, maxAds: settings.maxAds,autoRefresh:Boolean(settings.autoRefresh) };
 }
 function progressStatus(scan) {
   return scan.running ? 'scanning' : ['limit','visible-complete','no-new-ads','meta-exhausted'].includes(scan.reason) ? 'completed' : scan.reason ? 'stopped' : 'ready';
 }
+let progressTimer=null,latestProgress=null,lastProgressSent=0;
+function queueProgressBroadcast(progress){latestProgress=progress;if(progressTimer)return;progressTimer=setTimeout(()=>{progressTimer=null;lastProgressSent=Date.now();void chrome.runtime.sendMessage({type:'SCAN_PROGRESS',...latestProgress}).catch(()=>{});},Math.max(0,500-(Date.now()-lastProgressSent)));}
 async function publishProgress(state, override = null) {
   await sessionReady;
   const saved = await chrome.storage.session.get(['scanProgress','scanProgressRevision']);
@@ -52,7 +55,7 @@ async function publishProgress(state, override = null) {
     reportedTotal:state.scan.discovery?.reportedTotal??state.scan.reportedTotal??null,versionEncounters:state.scan.discovery?.versionEncounters||0,recoveryRound:state.scan.running?(state.scan.discovery?.recoveryRound||0):0,reason:state.scan.reason, status: progressStatus(state.scan), ...override, sessionId: state.scan.sessionId || null,
     revision: (saved.scanProgressRevision || 0) + 1 };
   await chrome.storage.session.set({ scanProgress: progress, scanProgressRevision: progress.revision });
-  void chrome.runtime.sendMessage({ type:'SCAN_PROGRESS', ...progress }).catch(() => {});
+  queueProgressBroadcast(progress);
   return progress;
 }
 async function finish(state, reason, results = {}) {
@@ -82,7 +85,8 @@ async function finish(state, reason, results = {}) {
     competitorStats[name] = { ids, count: ids.length, newCount: ids.filter((id) => !previous.has(id)).length, updatedAt: Date.now() };
   }
   try {
-    await chrome.storage.local.set({ ads, scrollCount, scan, history, telegramOutbox: outbox, competitorStats });
+    await chrome.storage.local.set({ ads, scrollCount, scan:{...scan,refreshing:false}, history, telegramOutbox: outbox, competitorStats,scanBatches:null });
+    if(state.scanBatches?.keys?.length)await chrome.storage.local.remove(state.scanBatches.keys);
     await publishProgress({ ...state, ads, scrollCount, scan });
     await chrome.storage.session.set({pendingScan:null});
     if (canQueue) { scheduleDelivery(); }
@@ -95,7 +99,7 @@ async function finish(state, reason, results = {}) {
 }
 async function reconcile() {
   let state = await readState();
-  if (state.scan.running) {
+  if (state.scan.running && !state.scan.refreshing) {
     let status;
     try { status = await chrome.tabs.sendMessage(state.scan.tabId, { type: 'META_SCAN_STATUS' }, { frameId: 0 }); }
     catch { /* Tab closed, navigated, or extension reloaded. */ }
@@ -115,17 +119,33 @@ function validateResults(message, state) {
 }
 function sanitizeDiscovery(value) {
   if (!value || !Number.isInteger(value.candidates) || !Number.isInteger(value.matched)) return null;
-  return { candidates: Math.max(0, value.candidates), matched: Math.max(0, value.matched), version: String(value.version || '').slice(0, 20), reportedTotal:Number.isSafeInteger(value.reportedTotal)?value.reportedTotal:null, versionEncounters:Number.isSafeInteger(value.versionEncounters)?value.versionEncounters:0,recoveryRound:Number.isInteger(value.recoveryRound)?value.recoveryRound:0, libraryCodeTexts: Math.max(0, Number.isInteger(value.libraryCodeTexts) ? value.libraryCodeTexts : 0) };
+  return { candidates: Math.max(0, value.candidates), matched: Math.max(0, value.matched), scrollY:Number(value.scrollY)||0,speed:Number.isFinite(value.speed)?value.speed:null,slow:Boolean(value.slow), version: String(value.version || '').slice(0, 20), reportedTotal:Number.isSafeInteger(value.reportedTotal)?value.reportedTotal:null, versionEncounters:Number.isSafeInteger(value.versionEncounters)?value.versionEncounters:0,recoveryRound:Number.isInteger(value.recoveryRound)?value.recoveryRound:0, libraryCodeTexts: Math.max(0, Number.isInteger(value.libraryCodeTexts) ? value.libraryCodeTexts : 0) };
 }
 async function handle(message, sender) {
-  const state = await readState();
   const type = message?.type;
+  const state=['SCAN_PROGRESS','META_SCAN_APPEND'].includes(type)?{...DEFAULTS,...await chrome.storage.local.get(['scan','settings','scrollCount','scanBatches'])}:await readState();
   if(sender.tab&&competitorService&&await competitorService.owns(sender,message))return competitorService.content(message,sender);
   // Content scripts can only report results for their own active session.
   if (sender.tab) {
-    if (!['META_SCAN_PROGRESS', 'META_SCAN_FINISHED', 'SCAN_PROGRESS'].includes(type) || sender.frameId !== 0 ||
+    if (!['META_SCAN_PROGRESS', 'META_SCAN_FINISHED', 'SCAN_PROGRESS','META_SCAN_APPEND','SCAN_REFRESH'].includes(type) || sender.frameId !== 0 ||
         !isLibrary(sender.url) || !state.scan.running || sender.tab.id !== state.scan.tabId ||
         message.sessionId !== state.scan.sessionId) throw new Error('Tarama oturumu artık etkin değil.');
+    if(type==='SCAN_REFRESH'){
+      if(!state.settings.autoRefresh)throw new Error('Otomatik yenileme etkin değil.');
+      await chrome.storage.local.set({scan:{...state.scan,refreshing:true,scrollY:Number(message.scrollY)||0,refreshDeadline:Date.now()+60000},scrollCount:message.scrollCount});
+      await chrome.alarms.create('scan-refresh-timeout',{when:Date.now()+60000});
+      try{await chrome.tabs.reload(state.scan.tabId);}catch{await finish(state,'error');throw new Error('Sayfa yenilenemedi; kayıtlar korunuyor.');}return {ok:true};
+    }
+    if(type==='META_SCAN_APPEND'){
+      if(!Array.isArray(message.records)||message.records.length>25||message.records.some(ad=>!/^\d{10,}$/.test(ad.id||'')))throw new Error('Geçersiz reklam paketi.');
+      const journal=state.scanBatches?.sessionId===state.scan.sessionId?state.scanBatches:{sessionId:state.scan.sessionId,keys:[],count:0};
+      const key='scan-batch:'+message.batchId;
+      if(!journal.keys.includes(key)){
+        if(journal.count+message.records.length>state.settings.maxAds)throw new Error('Reklam sınırı aşıldı.');
+        await chrome.storage.local.set({[key]:message.records,scanBatches:{...journal,keys:[...journal.keys,key],count:journal.count+message.records.length},scrollCount:message.scrollCount,scan:{...state.scan,discovery:sanitizeDiscovery(message.discovery),updatedAt:Date.now()}});
+      }
+      return {ok:true};
+    }
     if (type === 'SCAN_PROGRESS') {
       const { scanProgress } = await chrome.storage.session.get('scanProgress');
       if (!Number.isInteger(message.ads) || message.ads < state.ads.length || message.ads > state.settings.maxAds ||
@@ -176,15 +196,22 @@ async function handle(message, sender) {
         await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['ad-data.js','scan-loop.js','content.js'] });
         collector = await chrome.tabs.sendMessage(tab.id, { type: 'META_SCAN_STATUS' }, { frameId: 0 });
       }
-      if (collector?.version !== '0.8.0') throw new Error('Meta sekmesinde eski tarama kodu çalışıyor. Sayfayı yenile; panelde v0.8.0 görünmelidir.');
+      if (collector?.version !== '0.9.0') throw new Error('Meta sekmesinde eski tarama kodu çalışıyor. Sayfayı yenile; panelde v0.9.0 görünmelidir.');
       const scan = { running: true, stopping: false, tabId: tab.id, sessionId: crypto.randomUUID(),
         sourceUrl: tab.url, startedAt: Date.now(), updatedAt: Date.now(), reason: 'running' };
       // Save ownership before starting; queued progress cannot overtake this write.
       await chrome.storage.session.set({pendingScan:null});
       const initialAds=resuming?current.ads:[], initialScrolls=resuming?current.scrollCount:0;
       scan.reportedTotal=resuming?current.scan.reportedTotal??current.scan.discovery?.reportedTotal??null:null;
-      await chrome.storage.local.set({ ads:initialAds, scrollCount:initialScrolls, settings, scan });
+      await chrome.storage.local.set({ ads:initialAds, scrollCount:initialScrolls, settings, scan,scanBatches:null });
+      if(current.scanBatches?.keys?.length)await chrome.storage.local.remove(current.scanBatches.keys);
       await publishProgress({ ...current, ads:initialAds, scrollCount:initialScrolls, scan },{ ads:initialAds.length, scrolls:initialScrolls });
+      if(resuming&&current.scan.discovery?.slow){
+        await chrome.storage.local.set({scan:{...scan,refreshing:true,scrollY:current.scan.discovery.scrollY||0,refreshDeadline:Date.now()+60000}});
+        await chrome.alarms.create('scan-refresh-timeout',{when:Date.now()+60000});
+        try{await chrome.tabs.reload(tab.id);}catch{await finish({...current,scan},'error');throw new Error('Sayfa yenilenemedi.');}
+        return {ok:true};
+      }
       try {
         const startMessage = { type: 'META_SCAN_START', settings, tabId: tab.id, sessionId: scan.sessionId, resumeAds:initialAds, resumeScrolls:initialScrolls, resumeVersionEncounters:resuming?current.scan.discovery?.versionEncounters||0:0,resumeReportedTotal:scan.reportedTotal };
         let response;
@@ -215,7 +242,8 @@ async function handle(message, sender) {
     }
     case 'CLEAR_RESULTS':
       if ((await reconcile()).scan.running) throw new Error('Önce taramayı durdur.');
-      await chrome.storage.local.set({ ads: [], scrollCount: 0, scan: { running: false, reason: '' } });
+      await chrome.storage.local.set({ ads: [], scrollCount: 0, scan: { running: false, reason: '' },scanBatches:null });
+      if(state.scanBatches?.keys?.length)await chrome.storage.local.remove(state.scanBatches.keys);
       await publishProgress({ ...state, ads:[], scrollCount:0, scan:{running:false,reason:''} });
       break;
     case 'CLEAR_HISTORY': await chrome.storage.local.set({ history: [], telegramOutbox: [] }); break;
@@ -281,12 +309,13 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   enqueue(() => handle(message, sender)).then(respond, (error) => respond({ ok: false, error: error.message }));
   return true;
 });
-function tabGone(tabId) {
-  void enqueue(async () => { const state = await readState(); if (state.scan.running && state.scan.tabId === tabId) await finish(state, 'disconnected'); }).catch(console.warn);
+function tabGone(tabId,loading=false) {
+  void enqueue(async () => { const state = await readState(); if (state.scan.running && state.scan.tabId === tabId && !(loading&&state.scan.refreshing)) await finish(state, 'disconnected'); }).catch(console.warn);
 }
 chrome.tabs.onRemoved.addListener(tabGone);
 chrome.tabs.onUpdated.addListener((tabId, change) => {
-  if (change.status === 'loading') tabGone(tabId);
+  if(change.status==='complete')void enqueue(()=>resumeRefresh(tabId)).catch(()=>{});
+  if (change.status === 'loading') tabGone(tabId,true);
   else if (change.url) void enqueue(async () => {
     const state = await readState();
     if (state.scan.running && state.scan.tabId === tabId && change.url !== state.scan.sourceUrl) {
@@ -391,9 +420,22 @@ async function deliverNotifications() {
   }
 }
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if(alarm.name==='scan-refresh-timeout')void enqueue(async()=>{const state=await readState();if(state.scan.refreshing)await finish(state,'error');}).catch(()=>{});
   if (alarm.name === 'telegram-delivery') void deliverNotifications().catch(() => {});
 });
 chrome.runtime.onStartup.addListener(scheduleDelivery);
 chrome.runtime.onInstalled.addListener(scheduleDelivery);
 
 const competitorService=globalThis.CompetitorWatch?CompetitorWatch.create(chrome,{enqueue,sendTelegram}):null;
+
+async function resumeRefresh(tabId){
+ const state=await readState();if(!state.scan.running||!state.scan.refreshing||state.scan.tabId!==tabId)return;
+ const scan={...state.scan,sessionId:crypto.randomUUID(),refreshing:false};
+ await chrome.storage.local.set({scan,ads:state.ads,scanBatches:null});if(state.scanBatches?.keys?.length)await chrome.storage.local.remove(state.scanBatches.keys);
+ try{await chrome.scripting.executeScript({target:{tabId},files:['ad-data.js','scan-loop.js','content.js']});
+ const response=await chrome.tabs.sendMessage(tabId,{type:'META_SCAN_START',tabId,sessionId:scan.sessionId,settings:state.settings,resumeAds:state.ads,resumeScrolls:state.scrollCount,resumeReportedTotal:state.scan.discovery?.reportedTotal,scrollY:state.scan.scrollY},{frameId:0});
+ if(!response?.ok)throw new Error('Yenileme sonrası tarama başlatılamadı.');await chrome.alarms.clear('scan-refresh-timeout');
+ }catch{await finish({...state,scan},'error');}
+}
+
+chrome.runtime.onStartup.addListener(()=>{void enqueue(async()=>{const state=await readState();if(state.scan.refreshing){try{const tab=await chrome.tabs.get(state.scan.tabId);if(tab.status==='complete')await resumeRefresh(tab.id);}catch{await finish(state,'disconnected');}}}).catch(()=>{});});
