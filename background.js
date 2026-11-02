@@ -52,7 +52,7 @@ async function publishProgress(state, override = null) {
   const sameRunning = state.scan.running && previous?.sessionId === state.scan.sessionId;
   const progress = { ads: sameRunning ? Math.max(state.ads.length,previous.ads) : state.ads.length,
     scrolls: sameRunning ? Math.max(state.scrollCount,previous.scrolls) : state.scrollCount,
-    reportedTotal:state.scan.discovery?.reportedTotal??state.scan.reportedTotal??null,versionEncounters:state.scan.discovery?.versionEncounters||0,recoveryRound:state.scan.running?(state.scan.discovery?.recoveryRound||0):0,reason:state.scan.reason, status: progressStatus(state.scan), ...override, sessionId: state.scan.sessionId || null,
+    discovery:sameRunning?previous.discovery??state.scan.discovery:state.scan.discovery,reportedTotal:state.scan.discovery?.reportedTotal??state.scan.reportedTotal??null,versionEncounters:state.scan.discovery?.versionEncounters||0,recoveryRound:state.scan.running?(state.scan.discovery?.recoveryRound||0):0,reason:state.scan.reason, status: progressStatus(state.scan), ...override, sessionId: state.scan.sessionId || null,
     revision: (saved.scanProgressRevision || 0) + 1 };
   await chrome.storage.session.set({ scanProgress: progress, scanProgressRevision: progress.revision });
   queueProgressBroadcast(progress);
@@ -119,7 +119,7 @@ function validateResults(message, state) {
 }
 function sanitizeDiscovery(value) {
   if (!value || !Number.isInteger(value.candidates) || !Number.isInteger(value.matched)) return null;
-  return { candidates: Math.max(0, value.candidates), matched: Math.max(0, value.matched), scrollY:Number(value.scrollY)||0,speed:Number.isFinite(value.speed)?value.speed:null,slow:Boolean(value.slow), version: String(value.version || '').slice(0, 20), reportedTotal:Number.isSafeInteger(value.reportedTotal)?value.reportedTotal:null, versionEncounters:Number.isSafeInteger(value.versionEncounters)?value.versionEncounters:0,recoveryRound:Number.isInteger(value.recoveryRound)?value.recoveryRound:0, libraryCodeTexts: Math.max(0, Number.isInteger(value.libraryCodeTexts) ? value.libraryCodeTexts : 0) };
+  return { extractionFailures:Math.max(0,Number(value.extractionFailures)||0),found:Math.max(0,Number(value.found)||0),processed:Math.max(0,Number(value.processed)||0),skipped:Math.max(0,Number(value.skipped)||0),unreadable:Math.max(0,Number(value.unreadable)||0), candidates: Math.max(0, value.candidates), matched: Math.max(0, value.matched), scrollY:Number(value.scrollY)||0,speed:Number.isFinite(value.speed)?value.speed:null,slow:Boolean(value.slow), version: String(value.version || '').slice(0, 20), reportedTotal:Number.isSafeInteger(value.reportedTotal)?value.reportedTotal:null, versionEncounters:Number.isSafeInteger(value.versionEncounters)?value.versionEncounters:0,recoveryRound:Number.isInteger(value.recoveryRound)?value.recoveryRound:0, libraryCodeTexts: Math.max(0, Number.isInteger(value.libraryCodeTexts) ? value.libraryCodeTexts : 0) };
 }
 async function handle(message, sender) {
   const type = message?.type;
@@ -158,12 +158,12 @@ async function handle(message, sender) {
         const records=pendingScan?.sessionId===state.scan.sessionId?pendingScan.ads:[];
         await chrome.storage.session.set({pendingScan:{sessionId:state.scan.sessionId,ads:[...new Map([...records,message.record].map(ad=>[ad.id,ad])).values()]}});
       }
-      return { ok:true, progress:await publishProgress(state,{ads:message.ads,scrolls:message.scrolls,status:message.status,reportedTotal:Number.isSafeInteger(message.reportedTotal)?message.reportedTotal:null,versionEncounters:Number.isSafeInteger(message.versionEncounters)?message.versionEncounters:0,recoveryRound:Number.isInteger(message.recoveryRound)?message.recoveryRound:0}) };
+      return { ok:true, progress:await publishProgress(state,{ads:message.ads,scrolls:message.scrolls,status:message.status,discovery:sanitizeDiscovery(message.discovery),reportedTotal:Number.isSafeInteger(message.reportedTotal)?message.reportedTotal:null,versionEncounters:Number.isSafeInteger(message.versionEncounters)?message.versionEncounters:0,recoveryRound:Number.isInteger(message.recoveryRound)?message.recoveryRound:0}) };
     }
     const results = validateResults(message, state);
     try {
       if (type === 'META_SCAN_FINISHED') {
-        const reasons = ['stopped', 'limit', 'visible-complete', 'no-new-ads', 'no-cards', 'meta-exhausted', 'page-changed', 'error'];
+        const reasons = ['stopped', 'limit', 'visible-complete', 'no-new-ads', 'no-cards', 'id-unreadable', 'incomplete-cards', 'extraction-failed', 'meta-exhausted', 'page-changed', 'error'];
         await finish({...state,scan:{...state.scan,discovery:sanitizeDiscovery(message.discovery)}}, reasons.includes(message.reason) ? message.reason : 'error', results);
       } else {
         await chrome.storage.local.set({ ...results, scan: { ...state.scan, updatedAt: Date.now(), discovery: sanitizeDiscovery(message.discovery) } });
@@ -196,7 +196,7 @@ async function handle(message, sender) {
         await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['ad-data.js','scan-loop.js','content.js'] });
         collector = await chrome.tabs.sendMessage(tab.id, { type: 'META_SCAN_STATUS' }, { frameId: 0 });
       }
-      if (collector?.version !== '0.9.0') throw new Error('Meta sekmesinde eski tarama kodu çalışıyor. Sayfayı yenile; panelde v0.9.0 görünmelidir.');
+      if (collector?.version !== '0.9.1') throw new Error('Meta sekmesinde eski tarama kodu çalışıyor. Sayfayı yenile; panelde v0.9.1 görünmelidir.');
       const scan = { running: true, stopping: false, tabId: tab.id, sessionId: crypto.randomUUID(),
         sourceUrl: tab.url, startedAt: Date.now(), updatedAt: Date.now(), reason: 'running' };
       // Save ownership before starting; queued progress cannot overtake this write.

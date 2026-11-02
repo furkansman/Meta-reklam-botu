@@ -151,23 +151,29 @@ function applyProgress(progress) {
   if (liveProgress && progress.revision < liveProgress.revision) return;
   liveProgress = progress;
   renderLiveBar();
+  renderDiagnostics();
 }
 chrome.runtime.onMessage.addListener((message,sender) => {
   if (message?.type === 'SCAN_PROGRESS' && sender.id === chrome.runtime.id && !sender.tab) applyProgress(message);
 });
+function renderDiagnostics() {
+  const exported = AdData.rows(state.ads);
+  const filled = (column) => `${exported.filter((row) => row[column] !== '').length}/${exported.length}`;
+  const completeness = (state.scan?.reason==='meta-exhausted'?`Meta daha fazla reklam yüklemedi (${state.ads.length.toLocaleString('tr-TR')} benzersiz reklam) · `:'')+`Hook: ${filled('Hook')}, Başlık: ${filled('Başlık (Headline)')}, CTA: ${filled('CTA')}, Tarih: ${filled('Yayın Başlangıç')}, Medya URL: ${filled('Medya URL')}, Hedef URL: ${filled('Hedef URL')}`;
+  const discovery = liveProgress?.sessionId===state.scan?.sessionId && running ? liveProgress.discovery??state.scan?.discovery : state.scan?.discovery;
+  const totals=liveProgress && liveProgress.sessionId===state.scan?.sessionId?liveProgress:discovery;
+  $('#meta-totals').textContent=`Meta’nın bildirdiği: ${totals?.reportedTotal!=null?'~'+totals.reportedTotal:'bilinmiyor'} / Toplanan benzersiz: ${(liveProgress && liveProgress.sessionId===state.scan?.sessionId?liveProgress.ads:state.ads.length).toLocaleString('tr-TR')} · Çoklu versiyon karşılaşması: ${totals?.versionEncounters||0}`;
+  $('#scan-diagnostics').textContent = discovery ? `Sayfa betiği v${discovery.version} · ${discovery.candidates} aday / ${discovery.matched} kart · Kütüphane Kodu: ${discovery.libraryCodeTexts || 0} · ${completeness}` : completeness;
+  if(discovery)$('#scan-diagnostics').textContent+=` · sayfada bulunan kart: ${discovery.found||0}, işlenen: ${discovery.processed||0}, atlanan (zaten kayıtlı): ${discovery.skipped||0}`;
+  if(!running && ['no-cards','id-unreadable','incomplete-cards','extraction-failed'].includes(state.scan?.reason))$('#scan-diagnostics').textContent+=` · ${REASONS[state.scan.reason]}`;
+  if(discovery?.speed)$('#scan-diagnostics').textContent+=` · Hız: ${Math.round(discovery.speed)} reklam/dk`;
+  if(discovery?.slow)$('#scan-diagnostics').textContent+=" · Sayfa ağırlaştı, 'Devam Et' ile sayfayı yenileyip kaldığın yerden devam edebilirsin";
+}
 function renderScan() {
   renderLiveBar();
   $('#start-label').textContent = running ? 'Çalışıyor…' : 'Taramayı Başlat';
   renderDateAnalysis();
-  const exported = AdData.rows(state.ads);
-  const filled = (column) => `${exported.filter((row) => row[column] !== '').length}/${exported.length}`;
-  const completeness = (state.scan?.reason==='meta-exhausted'?`Meta daha fazla reklam yüklemedi (${state.ads.length.toLocaleString('tr-TR')} benzersiz reklam) · `:'')+`Hook: ${filled('Hook')}, Başlık: ${filled('Başlık (Headline)')}, CTA: ${filled('CTA')}, Tarih: ${filled('Yayın Başlangıç')}, Medya URL: ${filled('Medya URL')}, Hedef URL: ${filled('Hedef URL')}`;
-  const discovery = state.scan?.discovery;
-  const totals=liveProgress && liveProgress.sessionId===state.scan?.sessionId?liveProgress:discovery;
-  $('#meta-totals').textContent=`Meta’nın bildirdiği: ${totals?.reportedTotal!=null?'~'+totals.reportedTotal:'bilinmiyor'} / Toplanan benzersiz: ${(liveProgress && liveProgress.sessionId===state.scan?.sessionId?liveProgress.ads:state.ads.length).toLocaleString('tr-TR')} · Çoklu versiyon karşılaşması: ${totals?.versionEncounters||0}`;
-  $('#scan-diagnostics').textContent = discovery ? `Sayfa betiği v${discovery.version} · ${discovery.candidates} aday / ${discovery.matched} kart · Kütüphane Kodu: ${discovery.libraryCodeTexts || 0} · ${completeness}` : completeness;
-  if(discovery?.speed)$('#scan-diagnostics').textContent+=` · Hız: ${Math.round(discovery.speed)} reklam/dk`;
-  if(discovery?.slow)$('#scan-diagnostics').textContent+=" · Sayfa ağırlaştı, 'Devam Et' ile sayfayı yenileyip kaldığın yerden devam edebilirsin";
+  renderDiagnostics();
   $('#export-summary').textContent = `${filteredAds().length} / ${state.ads.length} reklam dışa aktarılacak`;
 
   $('#resume-scan').disabled=!ready||busy||running||!state.ads.length;
@@ -321,7 +327,10 @@ $('#filters-form').addEventListener('submit', (event) => {
 const REASONS = {
   limit: 'Maksimum reklam sayısına ulaşıldı.', 'visible-complete': 'Görünür reklamlar toplandı.',
   'meta-exhausted':'Meta daha fazla reklam yüklemedi. Toplanan veriler korunuyor; Devam Et ile yeniden deneyebilirsin.',
-  'no-cards': 'Reklam kartı bulunamadı. Meta sayfasında sonuçların yüklenmesini bekle; giriş/çerez pencerelerini kapatıp tekrar dene.',
+  'no-cards': 'Sayfada reklam kartı bulunamadı, Ad Library sonuç sayfasında olduğundan emin ol',
+  'id-unreadable': 'Kartlar bulundu ama ID okunamadı. Kütüphane Kodu / Library ID değerlerinin yüklenmesini bekle.',
+  'extraction-failed': 'Kartlar ve ID bulundu ancak reklam verileri okunamadı. Sayfayı yenileyip tekrar dene.',
+  'incomplete-cards': 'Kartlar bulundu ve ID okundu; reklamveren veya reklam detayları henüz yüklenmedi.',
   'no-new-ads': 'Yeni reklam bulunamadı. Sayfa yüklemesini ve dilini kontrol et.',
   'page-changed': 'Sayfa değiştiği için tarama durdu.', error: 'Tarama sırasında hata oluştu.',
   'storage-error': 'Sonuçlar kaydedilemedi. Depolama alanını kontrol et.', stopped: 'Tarama durduruldu.',

@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const VERSION = '0.9.0';
+  const VERSION = '0.9.1';
   if (globalThis.__metaAdCollector?.version === VERSION) return;
   // A previous boolean guard belongs to an older, non-disposable collector.
   if (globalThis.__metaAdCollector === true) return;
@@ -66,59 +66,94 @@
   }
   let discovery = { candidates: 0, matched: 0, libraryCodeTexts: 0, version: VERSION };
   function createIndex(current) {
-    const roots=new Set([document.body]),ready=new Map(),processed=new WeakSet(),elementIds=new WeakMap(),labels=new WeakSet();
-    let lastCard=null;
-    function enqueue(node){
-      const element=node.nodeType===Node.ELEMENT_NODE?node:node.parentElement;
-      if(!element||element.closest('script,style,noscript'))return;
-      for(let old=element,i=0;old&&old!==document.body&&i<20;old=old.parentElement,i++){const prior=current.lightened.get(old);if(prior&&old.style.contentVisibility==='hidden'){old.style.contentVisibility=prior.visibility;old.style.containIntrinsicSize=prior.size;}}
-      let scope=element;
-      for(let i=0;i<8&&scope.parentElement&&scope.parentElement!==document.body;i++){
-        const parent=scope.parentElement;if(parent.matches('main,[role="main"]'))break;
-        const text=parent.textContent||'';if(text.length>20000)break;
-        const ids=new Set([...text.matchAll(new RegExp(ID_LABEL.source,ID_LABEL.flags))].map(match=>match[2]));
-        if(ids.size!==1)break;scope=parent;
+    const roots = new Set(), ready = new Map(), processed = new WeakSet(), elementIds = new WeakMap();
+    let seen = new Set(), skipped = new Set(), invalid = new Set();
+    const clean = value => String(value || '').replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069]/g, '');
+    const idsIn = node => [...clean(textOf(node)).replace(/\s+/g, ' ').matchAll(new RegExp(ID_LABEL.source, ID_LABEL.flags))];
+    function enqueue(node) {
+      const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+      if (!element || element.closest('script,style,noscript')) return;
+      // React can recycle an old card element for a different ID. Restore it before reading.
+      for (let old = element; old && old !== document.body; old = old.parentElement) {
+        const prior = current.lightened.get(old);
+        if (prior) { old.style.contentVisibility = prior.visibility; old.style.containIntrinsicSize = prior.size; }
       }
-      if([...roots].some(root=>root.contains(scope)))return;
-      for(const root of roots)if(scope.contains(root))roots.delete(root);
-      roots.add(scope);
+      if ([...roots].some(root => root.contains(element))) return;
+      for (const root of roots) if (element.contains(root)) roots.delete(root);
+      roots.add(element);
     }
-    const observer=new MutationObserver(records=>{for(const record of records){if(record.type==='characterData')enqueue(record.target);else for(const node of record.addedNodes)enqueue(node);}if(wake)wake();});
-    observer.observe(document.body,{childList:true,subtree:true,characterData:true});
-    function drain(){
-      for(const root of roots){
-        if(!root.isConnected)continue;
-        const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let node;
-        while((node=walker.nextNode())){
-          if(node.parentElement.closest('script,style,noscript'))continue;
-          if(/Kütüphane\s+Kodu/i.test(node.textContent)&&!labels.has(node)){labels.add(node);discovery.libraryCodeTexts++;}
-          // Header result estimates are read once from new text, never body.innerText.
-          const estimate=node.textContent.match(/(?:[~≈]\s*)?(\d+(?:[.,\u00a0 ]\d{3})*)\s*(?:sonuç|results)(?![\p{L}])/iu);
-          if(estimate)current.reportedTotal=Number(estimate[1].replace(/[^\d]/g,''));
-          if(!/Kütüphane|Library/i.test(node.textContent))continue;
-          let marker=node.parentElement;
-          for(let i=0;i<3&&marker&&![...String(marker.textContent).matchAll(new RegExp(ID_LABEL.source,ID_LABEL.flags))].length;i++)marker=marker.parentElement;
-          if(!marker||marker===document.body)continue;
-          for(const match of String(marker.textContent).matchAll(new RegExp(ID_LABEL.source,ID_LABEL.flags))){
-            const id=match[2];if(current.ids.has(id))continue;
-            discovery.candidates++;
-            for(let card=marker;card&&card!==document.body;card=card.parentElement){
-              const ids=new Set([...String(card.textContent).matchAll(new RegExp(ID_LABEL.source,ID_LABEL.flags))].map(item=>item[2]));
-              if(ids.size!==1||!ids.has(id))break;
-              const header=cardHeader(card);
-              if(header){
-                if(!processed.has(card)||elementIds.get(card)!==id){ready.set(id,{element:card,header});lastCard=card;}
-                break;
-              }
+    const observer = new MutationObserver(records => {
+      for (const record of records) {
+        if (record.type === 'characterData') enqueue(record.target);
+        else for (const node of record.addedNodes) enqueue(node);
+      }
+      if (wake) wake();
+    });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    function scan(root) {
+      if (!root.isConnected) return;
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let node;
+      while ((node = walker.nextNode())) {
+        if (node.parentElement.closest('script,style,noscript')) continue;
+        const estimate = node.textContent.match(/(?:[~≈]\s*)?(\d+(?:[.,\u00a0 ]\d{3})*)\s*(?:sonuç|results)(?![\p{L}])/iu);
+        if (estimate) current.reportedTotal = Number(estimate[1].replace(/[^\d]/g, ''));
+        if (!/Kütüphane|Library/i.test(clean(node.textContent))) continue;
+        // No ancestor-depth limit: Meta may split a label and ID across many wrappers.
+        // innerText preserves boundaries between block elements, unlike textContent.
+        let marker = node.parentElement, matches = [];
+        while (marker && marker !== document.body) {
+          matches = idsIn(marker);
+          if (matches.length) break;
+          marker = marker.parentElement;
+        }
+        if (!matches.length) { invalid.add(node.parentElement); continue; }
+        for (const match of matches) {
+          const id = match[2]; seen.add(id);
+          if (current.ids.has(id)) { skipped.add(id); continue; }
+          for (let card = marker; card && card !== document.body; card = card.parentElement) {
+            const ids = new Set(idsIn(card).map(item => item[2]));
+            // Never borrow the neighbouring card's advertiser or details button.
+            if (ids.size !== 1 || !ids.has(id)) break;
+            const header = cardHeader(card);
+            if (header) {
+              if (!processed.has(card) || elementIds.get(card) !== id) ready.set(id, { element: card, header });
+              break;
             }
           }
         }
       }
-      roots.clear();discovery.matched=current.ads.size+ready.size;
+    }
+    function diagnostics() {
+      discovery.candidates = seen.size + invalid.size;
+      discovery.found = discovery.candidates;
+      discovery.skipped = skipped.size;
+      discovery.matched = current.ads.size + ready.size;
+      discovery.unreadable = invalid.size;
       return ready;
     }
-    return {drain,mark(card,id){processed.add(card);elementIds.set(card,id);},get lastCard(){return lastCard;},dispose(){observer.disconnect();roots.clear();ready.clear();}};
+    function drain() {
+      for (const root of roots) scan(root);
+      roots.clear();
+      return diagnostics();
+    }
+    return {
+      drain,
+      beginRound() { seen = new Set(ready.keys()); skipped = new Set(); invalid = new Set(); discovery.processed = 0; },
+      fullScan() {
+        scan(document.body);
+        // Count split labels too, without reading the entire page's innerText.
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT), text = [];
+        let node;
+        while ((node = walker.nextNode())) if (!node.parentElement.closest('script,style,noscript')) text.push(node.textContent);
+        discovery.libraryCodeTexts = (clean(text.join(' ')).match(/Kütüphane\s+Kodu/gi) || []).length;
+        return diagnostics();
+      },
+      mark(card, id) { processed.add(card); elementIds.set(card, id); discovery.processed++; },
+      dispose() { observer.disconnect(); roots.clear(); ready.clear(); }
+    };
   }
+
   function callToAction(card, sponsor) {
     const candidates = [...card.querySelectorAll('button,[role="button"],a[href]')].filter((node) => {
       const label = normalized(node);
@@ -185,7 +220,7 @@
   async function liveProgress(current,status='scanning') {
     if(Date.now()-current.lastProgress<500){current.pendingStatus=status;if(!current.progressTimer)current.progressTimer=setTimeout(()=>{current.progressTimer=null;void liveProgress(current,current.pendingStatus).catch(()=>{});},500-(Date.now()-current.lastProgress));return;}
     current.lastProgress=Date.now();
-    const response=await chrome.runtime.sendMessage({type:'SCAN_PROGRESS',ads:current.ads.size,scrolls:current.scrollCount,status,reportedTotal:current.reportedTotal??null,versionEncounters:current.versionEncounters,recoveryRound:current.recoveryRound||0,sessionId:current.sessionId});
+    const response=await chrome.runtime.sendMessage({type:'SCAN_PROGRESS',ads:current.ads.size,scrolls:current.scrollCount,status,discovery:{...discovery,speed:current.speed||null,slow:current.slow||false},reportedTotal:current.reportedTotal??null,versionEncounters:current.versionEncounters,recoveryRound:current.recoveryRound||0,sessionId:current.sessionId});
     if(!response?.ok)throw new Error(response?.error||'Canlı sayaç güncellenemedi.');
     if(!response.competitor)await chrome.storage.session.set({scanProgress:response.progress});
   }
@@ -209,17 +244,24 @@
     current.recent.push(card);
     // Preserve React's DOM and measured list height; only skip old offscreen rendering.
     if(current.recent.length>100){const old=current.recent.shift();if(old.isConnected){const prior=current.lightened.get(old)||{visibility:old.style.contentVisibility,size:old.style.containIntrinsicSize};current.lightened.set(old,prior);current.styles.push({node:new WeakRef(old),...prior});const height=Math.max(600,old.getBoundingClientRect().height);old.style.containIntrinsicSize=`0px ${height}px`;old.style.contentVisibility='hidden';}}
-    for(const video of card.querySelectorAll('video')){try{video.pause();video.preload='none';}catch{}}
   }
   async function run(current){
-    let reason='stopped';discovery={candidates:0,matched:0,libraryCodeTexts:0,version:VERSION};
+    let reason='stopped',initialPassPending=true;discovery={candidates:0,matched:0,libraryCodeTexts:0,version:VERSION};
     const index=createIndex(current);current.index=index;
-    const collect=async()=>{
+    const collect=async(forceFull=false)=>{
       const before=current.ads.size;
-      for(const [id,record]of index.drain()){
+      index.beginRound();
+      let queued=index.drain();
+      // Existing DOM is authoritative when no new observer cards were found.
+      const fullScanned=forceFull||!queued.size;
+      if(fullScanned)queued=index.fullScan();
+      for(const [id,record]of queued){
         if(current.ids.has(id)){index.drain().delete(id);continue;}
         if(current.ads.size>=current.settings.maxAds)break;
-        const ad=extract(id,record);current.ids.add(id);current.ads.set(id,ad);current.pending.push(ad);index.mark(record.element,id);
+        let ad;
+        try { ad=extract(id,record); if(!ad || ad.id!==id)throw new Error('Reklam ID okunamadı.'); }
+        catch { queued.delete(id); discovery.extractionFailures=(discovery.extractionFailures||0)+1; continue; }
+        current.ids.add(id);current.ads.set(id,ad);current.pending.push(ad);index.mark(record.element,id);
         if(/birden fazla versiyonu var|multiple versions|several versions/i.test(record.element.textContent||''))current.versionEncounters++;
         lighten(current,record.element);index.drain().delete(id);
         if((current.ads.size-current.initialCount)%50===0){const elapsed=Math.max(.001,(performance.now()-current.speedAt)/1000);current.speed=3000/elapsed;current.baselineSpeed??=current.speed;current.slow=current.speed<current.baselineSpeed*.3;current.speedAt=performance.now();}
@@ -230,13 +272,21 @@
           if(!response?.ok){current.refreshing=false;throw new Error(response?.error||'Otomatik yenileme başlatılamadı.');}current.refreshing=true;current.stopped=true;break;
         }
       }
+      if(current.ads.size===before&&!fullScanned&&!current.stopped){await collect(true);return;}
       if(current.ads.size>before)current.recoveryRound=0;
       await liveProgress(current);
     };
     const waitForNew=timeout=>waitUntil(current,()=>index.drain().size>0,timeout);
     try{
-      if(!index.drain().size)await waitForNew(12000);
-      reason=await ScanLoop.run(current.settings,{stopped:()=>current.stopped||!onLibrary()||location.href!==current.url,count:()=>current.ads.size,collect,waitForNew,
+      // Process the complete current DOM before waiting for mutations or scrolling.
+      await collect();
+      if(!current.ads.size&&!current.stopped){
+        await waitForNew(Math.max(0,5000-(Date.now()-current.startedAt)));
+        await collect();
+      }
+      if(!current.ads.size&&!current.stopped){
+        reason=discovery.extractionFailures?'extraction-failed':discovery.found ? (discovery.unreadable===discovery.found?'id-unreadable':'incomplete-cards') : 'no-cards';
+      }else reason=await ScanLoop.run(current.settings,{stopped:()=>current.stopped||!onLibrary()||location.href!==current.url,count:()=>current.ads.size,collect:async()=>{if(initialPassPending){initialPassPending=false;return;}await collect();},waitForNew,
         scroll:async()=>{window.scrollTo(0,document.body.scrollHeight);current.scrollCount++;await liveProgress(current);},
         recovery:async round=>{current.recoveryRound=round;await flush(current);await liveProgress(current);},
         clickMore:async()=>{[...document.querySelectorAll('button,[role="button"],a')].find(node=>visible(node)&&/^(daha fazla göster|daha çok göster|see more|load more|show more)$/i.test(normalized(node)))?.click();},
