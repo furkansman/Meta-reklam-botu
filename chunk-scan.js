@@ -1,13 +1,13 @@
 (function (root) {
   'use strict';
   const DAY = 86400000, NEXT = 'chunk-next', TIMEOUT = 'chunk-timeout', REPORT = 'chunk-report';
-  const FILTER_HELP = 'Sayfada tarih filtresini bir kez uygulayıp tekrar dene';
+  const LIBRARY_HELP = 'Önce Meta Reklam Kütüphanesi sonuç sayfasını aç, sonra başlat.';
   const OVERLAP = 'Meta filtresi pencerede yayında olan reklamları getiriyor, parçalar çakışabilir';
   const SLOW = 'Hız düştü, sekme öne alınmalı ya da dinlenmeli';
   const date = value => /^\d{4}-\d{2}-\d{2}$/.test(value || '') && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
   const iso = time => new Date(time).toISOString().slice(0, 10);
   const today = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-  const library = value => { try { const url = new URL(value); return url.origin === 'https://www.facebook.com' && /^\/ads\/library\/?$/.test(url.pathname); } catch { return false; } };
+  const library = value => { try { const url = new URL(value); return ['www.facebook.com','facebook.com'].includes(url.hostname) && url.protocol === 'https:' && /^\/ads\/library\/?$/.test(url.pathname); } catch { return false; } };
   function settings(value) {
     if (!date(value?.start) || !date(value?.end) || value.start > value.end || value.start < '2000-01-01' || value.end > today() ||
         !['day', 'week', 'month'].includes(value.unit) || !Number.isInteger(value.limit) || value.limit < 1 || value.limit > 10000 ||
@@ -31,19 +31,9 @@
       parts.push({ start, end: iso(Math.min(Date.parse(config.end), next - DAY)), attempt: 0 });
       start = iso(next);
     }
+    // Keep a one-day weekly tail in the preceding piece (7 + 8 days, not 7 + 7 + 1).
+    if(config.unit==='week' && parts.length>1 && parts.at(-1).start===parts.at(-1).end){const tail=parts.pop();parts.at(-1).end=tail.end;}
     return parts;
-  }
-  function learnDateParams(value, saved = null) {
-    if (!library(value)) throw new Error('Önce Meta Reklam Kütüphanesi sonuç sayfasını aç.');
-    const entries = [...new URL(value).searchParams].filter(([name, value]) => /date/i.test(name) && date(value));
-    for (const [min] of entries) {
-      if (!/(?:\[|_|^)(?:min|from|since|start)(?:\]|_|$)/i.test(min)) continue;
-      const stem = name => name.toLowerCase().replace(/min|max|from|since|start|to|until|end/g, '');
-      const max = entries.find(([name]) => name !== min && /(?:\[|_|^)(?:max|to|until|end)(?:\]|_|$)/i.test(name) && stem(name) === stem(min))?.[0];
-      if (max) return { min, max };
-    }
-    if (saved && typeof saved.min === 'string' && typeof saved.max === 'string' && saved.min !== saved.max && /date/i.test(saved.min) && /date/i.test(saved.max)) return { min: saved.min, max: saved.max };
-    throw new Error(FILTER_HELP);
   }
   function baseFilters(value) {
     const url = new URL(value), media = url.searchParams.get('media_type');
@@ -63,9 +53,11 @@
     }
     return [];
   }
-  function pieceUrl(base, params, piece) {
+  function pieceUrl(base, piece) {
+    if(!library(base))throw new Error(LIBRARY_HELP);
     const url = new URL(base);
-    url.searchParams.set(params.min, piece.start); url.searchParams.set(params.max, piece.end);
+    url.searchParams.delete('start_date[min]');url.searchParams.delete('start_date[max]');
+    url.searchParams.append('start_date[min]', piece.start);url.searchParams.append('start_date[max]', piece.end);
     if (piece.media) url.searchParams.set('media_type', piece.media);
     if (piece.platform) {
       for (const name of [...url.searchParams.keys()]) if (/^publisher_platforms(?:\[.*\])?$/.test(name)) url.searchParams.delete(name);
@@ -95,6 +87,21 @@
       timer = setTimeout(() => check(true), 8000); check(false);
     });
   }
+  function rankPage() {
+    const ids=[],seen=new Set(),walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);
+    const pattern=/(Kütüphane\s+Kodu|Library\s+ID)\s*:?\s*(\d{10,})/gi;
+    let node;
+    while((node=walker.nextNode())){
+      if(node.parentElement.closest('script,style,noscript,[hidden],[aria-hidden="true"]')||!/Kütüphane|Library/i.test(node.textContent)||!node.parentElement.getClientRects().length)continue;
+      for(let element=node.parentElement;element&&element!==document.body;element=element.parentElement){
+        const matches=[...(element.innerText||element.textContent||'').replace(/[\u200B-\u200F\u202A-\u202E\u2066-\u2069]/g,'').matchAll(pattern)];
+        if(!matches.length)continue;
+        if(new Set(matches.map(match=>match[2])).size!==1)break;
+        const id=matches[0][2];if(!seen.has(id)){seen.add(id);ids.push(id);}break;
+      }
+    }
+    return ids;
+  }
   function summary(run) {
     const failures = run.done.filter(item => item.status === 'failed');
     const lines = ['Meta Reklam Botu — Parçalı tarama tamamlandı', `Toplam benzersiz reklam: ${run.uniqueCount}`, `Ham reklam: ${run.rawCount}`, `Taranan parça: ${run.scannedParts}`, `Başarısız parça: ${failures.length}`];
@@ -109,8 +116,8 @@
   }
   function create(chrome, hooks) {
     const enqueue = hooks.enqueue, now = hooks.now || Date.now, random = hooks.random || Math.random;
-    let cacheId = null, pool = new Map(), cachedKeys = new Set(), timer = null;
-    const read = async () => (await chrome.storage.local.get('chunkRun')).chunkRun;
+    let cacheId = null, pool = new Map(), cachedKeys = new Set(), locations = new Map(), timer = null;
+    const read = async () => {const run=(await chrome.storage.local.get('chunkRun')).chunkRun;if(run)delete run.params;return run;};
     const save = run => chrome.storage.local.set({ chunkRun: run });
     const close = async (tabId, expected = null) => {
       if (!Number.isInteger(tabId)) return;
@@ -126,11 +133,11 @@
       } catch { /* Already closed. */ }
     };
     async function poolFor(run) {
-      if (cacheId !== run.id) { cacheId = run.id; pool = new Map(); cachedKeys = new Set(); }
+      if (cacheId !== run.id) { cacheId = run.id; pool = new Map(); cachedKeys = new Set(); locations = new Map(); }
       const missing = run.poolKeys.filter(name => !cachedKeys.has(name));
       if (missing.length) {
         const batches = await chrome.storage.local.get(missing);
-        for (const name of missing) { for (const ad of batches[name] || []) pool.set(ad.id, ad); cachedKeys.add(name); }
+        for (const name of missing) { for (const ad of batches[name] || []) {pool.set(ad.id, ad);locations.set(ad.id,name);} cachedKeys.add(name); }
       }
       return pool;
     }
@@ -151,14 +158,17 @@
       if (!run?.visible) return state;
       return { ...state, ads: [...(await poolFor(run)).values()], scrollCount: run.scrollCount, scan: { ...state.scan, sourceUrl: run.baseUrl } };
     }
-    async function start(config) {
+    async function start(config, sourceTabId = null) {
       config = settings(config);
-      const stored = await chrome.storage.local.get(['scan', 'chunkRun', 'chunkDateParams', 'scanBatches', 'settings']);
+      const stored = await chrome.storage.local.get(['scan', 'chunkRun', 'scanBatches', 'settings']);
       if (stored.scan?.running || stored.chunkRun?.running) throw new Error('Önce çalışan taramayı durdur.');
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      const params = learnDateParams(tab?.url, stored.chunkDateParams);
-      const run = { id: crypto.randomUUID(), config, baseUrl: tab.url, params, visible: true, running: true, phase: 'queued', queue: ranges(config), done: [], splits: [], active: null, poolKeys: [], uniqueCount: 0, rawCount: 0, scrollCount: 0, scannedParts: 0, baselineSpeed: null, overlap: false, startedAt: now(), nextAt: now(), speed: stored.settings?.speed || 'medium' };
-      await chrome.storage.local.set({ chunkRun: run, chunkConfig: config, chunkDateParams: params, ads: [], scrollCount: 0, scan: { running: false, reason: '', sourceUrl: tab.url }, scanBatches: null });
+      let tab;
+      try{tab=Number.isInteger(sourceTabId)?await chrome.tabs.get(sourceTabId):(await chrome.tabs.query({active:true,currentWindow:true}))[0];}
+      catch{throw new Error('sekme bulunamadı: Aktif sekmenin adresi okunamadı.');}
+      if(!Number.isInteger(tab?.id))throw new Error('sekme bulunamadı.');
+      if(!library(tab.url))throw new Error(LIBRARY_HELP);
+      const run = { id: crypto.randomUUID(), config, baseUrl: tab.url, firstUrl:pieceUrl(tab.url,ranges(config)[0]), visible: true, running: true, phase: 'queued', queue: ranges(config), done: [], splits: [], active: null, poolKeys: [], uniqueCount: 0, rawCount: 0, scrollCount: 0, scannedParts: 0, baselineSpeed: null, overlap: false, startedAt: now(), nextAt: now(), speed: stored.settings?.speed || 'medium' };
+      await chrome.storage.local.set({ chunkRun: run, chunkConfig: config, ads: [], scrollCount: 0, scan: { running: false, reason: '', sourceUrl: tab.url }, scanBatches: null });
       const obsolete = [...(stored.chunkRun?.poolKeys || []), ...(stored.scanBatches?.keys || [])];
       if (obsolete.length) await chrome.storage.local.remove(obsolete);
       await progress(run); await next(); return { ok: true };
@@ -168,10 +178,11 @@
       if (run.nextAt > now()) { await chrome.alarms.create(NEXT, { when: run.nextAt }); return; }
       if (!run.queue.length) { await finishRun(run); return; }
       const piece = run.queue.shift();
-      run.active = { piece, sessionId: crypto.randomUUID(), tabId: null, phase: 'creating', deadline: now() + 45000, startedAt: now(), scrolls: 0, count: 0, seenIds: piece.seenIds || [], total: null };
+      run.active = { piece, sessionId: crypto.randomUUID(), tabId: null, phase: 'creating', deadline: now() + 45000, startedAt: now(), scrolls: 0, count: 0, seenIds: piece.seenIds || [], orderIds:[], total: null };
+      run.currentUrl=pieceUrl(run.baseUrl,piece);run.firstUrl??=run.currentUrl;
       run.phase = 'running'; await save(run); await chrome.alarms.create(TIMEOUT, { when: run.active.deadline });
       try {
-        const tab = await chrome.tabs.create({ url: pieceUrl(run.baseUrl, run.params, piece), active: true });
+        const tab = await chrome.tabs.create({ url: pieceUrl(run.baseUrl, piece), active: true });
         run.active.tabId = tab.id; run.active.phase = 'loading'; await save(run); await progress(run);
         if (tab.status === 'complete') await loaded(tab.id);
       } catch { await retry('Parça sekmesi açılamadı.'); }
@@ -198,19 +209,34 @@
     }
     async function append(run, incoming) {
       const map = await poolFor(run), seen = new Set(run.active.seenIds);
-      const fresh = [], freshIds = new Set();
+      let visibleIds=[];
+      try{const [result]=await chrome.scripting.executeScript({target:{tabId:run.active.tabId},func:rankPage});if(Array.isArray(result?.result))visibleIds=result.result.filter(id=>/^\d{10,}$/.test(id));}catch{/* Retain discovery order when the tab has already gone. */}
+      const order=run.active.orderIds||[],known=new Set(order);
+      for(let i=0;i<visibleIds.length;i++)if(!known.has(visibleIds[i])){
+        const next=visibleIds.slice(i+1).find(id=>known.has(id));
+        if(next)order.splice(order.indexOf(next),0,visibleIds[i]);else order.push(visibleIds[i]);
+        known.add(visibleIds[i]);
+      }
+      for(const ad of incoming)if(!known.has(ad.id)){known.add(ad.id);order.push(ad.id);}
+      run.active.orderIds=order;
+      const ranks=new Map(order.map((id,index)=>[id,index+1])),pieceLabel=label(run.active.piece);
+      const fresh = [], freshIds = new Set(), updates=new Map();
       for (const ad of incoming) {
         if (!seen.has(ad.id)) { seen.add(ad.id); run.rawCount++; }
-        if (!map.has(ad.id) && !freshIds.has(ad.id)) { fresh.push(ad); freshIds.add(ad.id); }
+        const record={...ad,chunkRank:ranks.get(ad.id),chunkPiece:pieceLabel};
+        if (!map.has(ad.id) && !freshIds.has(ad.id)) { fresh.push(record); freshIds.add(ad.id); }
       }
+      for(const [id,rank]of ranks){const prior=map.get(id);if(prior?.chunkPiece===pieceLabel&&prior.chunkRank!==rank)updates.set(id,{...prior,chunkRank:rank});}
       run.active.seenIds = [...seen];
       run.active.count = Math.max(run.active.count, seen.size);
       for (let offset = 0; offset < fresh.length; offset += 25) {
         const batch = fresh.slice(offset, offset + 25), name = `chunk-pool:${run.id}:${run.poolKeys.length}`;
         run.poolKeys.push(name); run.uniqueCount += batch.length;
         await chrome.storage.local.set({ [name]: batch, chunkRun: run });
-        for (const ad of batch) map.set(ad.id, ad); cachedKeys.add(name);
+        for (const ad of batch) {map.set(ad.id, ad);locations.set(ad.id,name);} cachedKeys.add(name);
       }
+      const keys=[...new Set([...updates.keys()].map(id=>locations.get(id)).filter(Boolean))];
+      if(keys.length){const batches=await chrome.storage.local.get(keys);for(const name of keys){const batch=(batches[name]||[]).map(ad=>updates.get(ad.id)||ad);await chrome.storage.local.set({[name]:batch,chunkRun:run});for(const ad of batch)map.set(ad.id,ad);}}
       await save(run);
     }
     async function owns(sender, message) {
@@ -247,7 +273,7 @@
       return { ok: true, progress: await progress(await read()) };
     }
     async function disposeActive(run) {
-      const tabId = run.active?.tabId, expected = run.active ? pieceUrl(run.baseUrl, run.params, run.active.piece) : null;
+      const tabId = run.active?.tabId, expected = run.active ? pieceUrl(run.baseUrl, run.active.piece) : null;
       run.active = null; await save(run); await chrome.alarms.clear(TIMEOUT); await close(tabId, expected);
     }
     async function detach(run) {
@@ -257,7 +283,7 @@
     async function settle(status, error = '') {
       const run = await read(), active = run?.active; if (!active) return;
       run.done.push({ piece: active.piece, status, error, count: active.count, speed: active.speed || 0, slow: active.slow || false, total: active.total });
-      run.last = { label: label(active.piece), count: active.count, speed: active.speed || 0, slow: active.slow || false };
+      run.last = { label: label(active.piece), count: active.count, total:active.total, speed: active.speed || 0, slow: active.slow || false };
       await disposeActive(run);
       if (run.queue.length) await schedule(run, wait(run)); else await finishRun(run);
     }
@@ -372,6 +398,6 @@
     chrome.runtime.onInstalled.addListener(() => { void enqueue(() => recover(false)).catch(failSafe); });
     return { start, next, loaded, owns, content, pause, resume, clear, hide, view, progress, recover, report, read };
   }
-  const api = { create, ranges, split, pieceUrl, learnDateParams, settings, label, key, today, parseResults, probePage, summary, FILTER_HELP, OVERLAP, SLOW };
+  const api = { create, ranges, split, pieceUrl, library, settings, label, key, today, parseResults, probePage, rankPage, summary, LIBRARY_HELP, OVERLAP, SLOW };
   root.ChunkScan = api; if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(globalThis);

@@ -7,6 +7,8 @@
   <link rel="stylesheet" href="popup.css">
   <script src="ad-data.js" defer></script>
   <script src="xlsx.js" defer></script>
+  <script src="chunk-scan.js" defer></script>
+  <script src="chunk-export.js" defer></script>
   <script src="chunk-popup.js" defer></script>
   <script src="popup.js" defer></script>
 </head>
@@ -68,6 +70,7 @@
             <button id="chunk-start-button" class="primary" type="submit">Parçalı taramayı başlat</button>
           </fieldset>
           <p id="chunk-feedback" class="hint" role="status" aria-live="polite"></p>
+          <p id="chunk-url-diagnostics" class="hint" role="status" aria-live="polite"></p>
           <ul id="chunk-failures" class="hint" hidden aria-label="Başarısız parçalar"></ul>
         </form>
         <button id="resume-scan" class="secondary" type="button" disabled>Devam Et</button>
@@ -143,7 +146,7 @@
     </section>
       <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
     </main>
-    <footer><span class="footer-brand">Meta Reklam Botu</span><span class="footer-state"><i aria-hidden="true"></i> Yerel çalışma alanı</span><span>v0.10.0</span></footer>
+    <footer><span class="footer-brand">Meta Reklam Botu</span><span class="footer-state"><i aria-hidden="true"></i> Yerel çalışma alanı</span><span>v0.10.1</span></footer>
   </div>
 </body>
 </html>

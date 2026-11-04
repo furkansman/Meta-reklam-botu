@@ -2,11 +2,11 @@
   'use strict';
   const xml=(value)=>String(value??'').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g,'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
   function workbook(_columns,records,options={}){
-    const columns=root.AdData.EXCEL_COLUMNS;
+    const extra=options.extraColumns||[],columns=[...root.AdData.EXCEL_COLUMNS,...extra];
     records=[...records].sort((a,b)=>(b['Yaş (gün)']===''?-Infinity:b['Yaş (gün)'])-(a['Yaş (gün)']===''?-Infinity:a['Yaş (gün)']));
     if(records.length>1048575||records.some(row=>columns.some(column=>String(row[column]??'').length>32767)))throw new Error('Excel hücre/satır sınırı aşıldı. Tam veri için CSV veya JSON kullan.');
     const cell=(value,col,row,style)=>typeof value==='number'?`<c r="${col}${row}" s="${style}"><v>${value}</v></c>`:`<c r="${col}${row}" s="${style}" t="inlineStr"><is><t xml:space="preserve">${xml(value)}</t></is></c>`;
-    const widths=[23,30,65,42,20,13,29,16,55,30,55];
+    const widths=[23,30,65,42,20,13,29,16,55,30,55,...extra.map((_,index)=>index===0?29:40)];
     const sheetRows=[columns,...records.map(record=>columns.map(column=>record[column]))];
     const data=sheetRows.map((row,index)=>`<row r="${index+1}">${row.map((value,j)=>{
       const group=j===6?root.AdData.GROUPS.indexOf(value):-1;
@@ -22,7 +22,7 @@
     table('Tekrar eden hook kalıpları',['İlk 3 Kelime','Adet','Örnek Hook'],summary.patterns);
     const summaryData=overview.map((row,index)=>`<row r="${index+1}">${row.values.map((value,j)=>cell(value,String.fromCharCode(65+j),index+1,row.style??(j===2?3:0))).join('')}</row>`).join('');
     const cols=values=>'<cols>'+values.map((width,i)=>`<col min="${i+1}" max="${i+1}" width="${width}" customWidth="1"/>`).join('')+'</cols>';
-    const mainSheet=`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane xSplit="2" ySplit="1" topLeftCell="C2" activePane="bottomRight" state="frozen"/></sheetView></sheetViews>${cols(widths)}<sheetData>${data}</sheetData><autoFilter ref="A1:K${records.length+1}"/></worksheet>`;
+    const mainSheet=`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane xSplit="2" ySplit="1" topLeftCell="C2" activePane="bottomRight" state="frozen"/></sheetView></sheetViews>${cols(widths)}<sheetData>${data}</sheetData><autoFilter ref="A1:${String.fromCharCode(64+columns.length)}${records.length+1}"/></worksheet>`;
     const overviewSheet=`<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"/></sheetViews>${cols([43,28,65,22,25])}<sheetData>${summaryData}</sheetData></worksheet>`;
     const fills=['<patternFill patternType="none"/>','<patternFill patternType="gray125"/>',...['163A70','E2EFDA','E7E6E6','D9EAF7','FFF2CC'].map(color=>`<patternFill patternType="solid"><fgColor rgb="FF${color}"/><bgColor indexed="64"/></patternFill>`)];
     const xf=(font=0,fill=0,format=0,alignment='')=>`<xf numFmtId="${format}" fontId="${font}" fillId="${fill}" borderId="0" xfId="0" applyFont="1" applyFill="1" applyNumberFormat="1"${alignment?' applyAlignment="1"':''}>${alignment}</xf>`;

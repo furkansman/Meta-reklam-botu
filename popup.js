@@ -234,9 +234,10 @@ function exportSearchName(ads) {
 function nameFromHistory(ads){const ids=new Set(ads.map(ad=>ad.id));for(const entry of state.history){if(entry.ads?.some(ad=>ids.has(ad.id))){try{return new URL(entry.sourceUrl).searchParams.get('q')||'Meta Ad Library';}catch{}}}return 'Meta Ad Library';}
 function downloadRecords(ads, format, name, searchName = null) {
   if (!ready || !ads.length) { feedback('İndirilecek arşiv verisi bulunamadı.'); return; }
-  const records = AdData.rows(ads);
+  const extended=Boolean(name==='meta-reklamlar' && state.chunkRun?.visible);
+  const prepared=ChunkExport.prepare(ads,extended),records=prepared.rows;
   let content;
-  try { content = format === 'csv' ? AdData.csv(records) : format === 'excel' ? AdXlsx.workbook(AdData.EXCEL_COLUMNS,records,{searchName:searchName || exportSearchName(ads)}) : JSON.stringify(records,null,2); }
+  try { content = format === 'csv' ? (extended?ChunkExport.csv(records):AdData.csv(records)) : format === 'excel' ? AdXlsx.workbook(AdData.EXCEL_COLUMNS,records,{searchName:searchName || exportSearchName(ads),extraColumns:prepared.extraColumns}) : JSON.stringify(records,null,2); }
   catch (error) { feedback(error.message); return; }
   const types = { csv:'text/csv;charset=utf-8', json:'application/json;charset=utf-8', excel:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
   const url = URL.createObjectURL(new Blob([content],{type:types[format]}));

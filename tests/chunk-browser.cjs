@@ -4,7 +4,7 @@ const { webcrypto } = require('node:crypto'), path = require('node:path');
 const ChunkScan = require('../chunk-scan.js'), AdData = require('../ad-data.js'), CompetitorWatch = require('../competitor.js');
 const root = path.resolve(__dirname, '..');
 (async () => {
-  const files = ['popup.html', 'popup.css', 'popup.js', 'chunk-popup.js', 'ad-data.js', 'xlsx.js'];
+  const files = ['popup.html', 'popup.css', 'popup.js', 'chunk-popup.js', 'chunk-scan.js', 'chunk-export.js', 'ad-data.js', 'xlsx.js'];
   const server = http.createServer((req, res) => {
     const file = req.url === '/' ? 'popup.html' : req.url.slice(1);
     if (!files.includes(file)) { res.writeHead(404); res.end(); return; }
@@ -13,8 +13,9 @@ const root = path.resolve(__dirname, '..');
   const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium', headless: true, args: ['--no-sandbox'] });
   try {
     const store = { telegramConfig: { enabled: true, token: 'fake-test-token', chatId: '123' } }, session = {}, tabs = new Map(), pages = [], events = {}, telegram = [], starts = [], opened = [];
+    let queryResult=null;
     let nextId = 20, activeId = 7, clock = Date.now(), listener, worker, service;
-    const source = 'https://www.facebook.com/ads/library/?q=implant&country=TR&active_status=active&start_date[min]=2026-10-01&start_date[max]=2026-10-31';
+    const source = 'https://www.facebook.com/ads/library/?q=%22implant%22&country=TR&active_status=active&search_type=keyword_exact_phrase&sort_data[mode]=total_impressions&sort_data[direction]=desc';
     const fixture = url => {
       const second = new URL(url).searchParams.get('start_date[min]') === '2026-10-02';
       const ids = second ? ['123456789012', '123456789013'] : ['123456789011', '123456789012'];
@@ -37,7 +38,7 @@ const root = path.resolve(__dirname, '..');
         async remove(keys) { for (const key of keys) delete (area === 'local' ? store : session)[key]; }
       }])),
       tabs: {
-        async query() { return [{ id: activeId, url: tabs.get(activeId)?.url }]; }, async get(id) { const tab = tabs.get(id); if (!tab) throw Error('Closed'); return { id: tab.id, url: tab.url, status: tab.status }; },
+        async query() { return queryResult ?? [{ id: activeId, url: tabs.get(activeId)?.url }]; }, async get(id) { const tab = tabs.get(id); if (!tab) throw Error('Closed'); return { id: tab.id, url: tab.url, status: tab.status }; },
         async create(value) {
           assert.equal(value.active, true); opened.push(value); const id = nextId++, page = await context.newPage(); activeId = id;
           await page.exposeFunction('runtimeSend', msg => send(msg, { id: 'test', tab: { id }, frameId: 0, url: page.url() }));
@@ -52,7 +53,7 @@ const root = path.resolve(__dirname, '..');
         async sendMessage(id, msg) {
           if (msg.type === 'META_SCAN_START') starts.push(msg);
           const tab = tabs.get(id); if (!tab) throw Error('Closed');
-          return tab.page.evaluate(msg => new Promise(resolve => window.collector?.(msg, { id: 'test' }, resolve)), msg);
+          return tab.page.evaluate(msg => new Promise((resolve,reject) => {if(!window.collector){reject(new Error('Collector not installed'));return;}window.collector(msg, { id: 'test' }, resolve);}), msg);
         },
         async remove(id) { const tab = tabs.get(id); tabs.delete(id); await tab?.page.close(); for (const handler of events.removed || []) handler(id); },
         onUpdated: event('updated'), onRemoved: event('removed')
@@ -71,8 +72,8 @@ const root = path.resolve(__dirname, '..');
     async function openPopup() {
       const popup = await context.newPage(); pages.push(popup); popup.on('pageerror', error => errors.push(error.message));
       await popup.exposeFunction('runtimeSend', msg => send(msg, { id: 'test', url: 'chrome-extension://test/popup.html' }));
-      await popup.exposeFunction('localGet', keys => chrome.storage.local.get(keys)); await popup.exposeFunction('localSet', values => chrome.storage.local.set(values)); await popup.exposeFunction('sessionGet', keys => chrome.storage.session.get(keys));
-      await popup.addInitScript(() => { window.chrome = { runtime: { id: 'test', sendMessage: runtimeSend, onMessage: { addListener(fn) { window.progressListener = fn; } } }, storage: { local: { get: localGet, set: localSet }, session: { get: sessionGet }, onChanged: { addListener(fn) { window.changeListener = fn; } } } }; });
+      await popup.exposeFunction('localGet', keys => chrome.storage.local.get(keys)); await popup.exposeFunction('localSet', values => chrome.storage.local.set(values)); await popup.exposeFunction('sessionGet', keys => chrome.storage.session.get(keys));await popup.exposeFunction('tabsQuery', query=>chrome.tabs.query(query));
+      await popup.addInitScript(() => { window.chrome = { tabs:{query:tabsQuery}, runtime: { id: 'test', sendMessage: runtimeSend, onMessage: { addListener(fn) { window.progressListener = fn; } } }, storage: { local: { get: localGet, set: localSet }, session: { get: sessionGet }, onChanged: { addListener(fn) { window.changeListener = fn; } } } }; });
       await popup.goto(`http://127.0.0.1:${server.address().port}/`); await popup.waitForFunction(() => !document.querySelector('#start-scan').disabled || document.querySelector('#scan-dot').classList.contains('scanning')); return popup;
     }
     const until = async predicate => { for (let i = 0; i < 1000; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 10)); } throw Error('Timed out: ' + JSON.stringify(store.chunkRun)); };
@@ -81,6 +82,9 @@ const root = path.resolve(__dirname, '..');
     assert.equal(await popup.locator('#chunk-unit').inputValue(), 'week'); assert.equal(await popup.locator('#chunk-limit').inputValue(), '800'); assert(await popup.locator('#chunk-fields').isHidden());
     await popup.check('#chunk-enabled'); await popup.getByRole('button', { name: 'Son 14 gün', exact: true }).click(); assert.equal(Date.parse(await popup.locator('#chunk-end').inputValue()) - Date.parse(await popup.locator('#chunk-start').inputValue()), 13 * 86400000);
     await popup.getByRole('button', { name: 'Tüm zamanlar', exact: true }).click(); assert.equal(await popup.locator('#chunk-start').inputValue(), '2020-09-01');
+    queryResult=[];await popup.click('#chunk-start-button');await popup.waitForFunction(()=>document.querySelector('#chunk-feedback').textContent.includes('sekme bulunamadı'));assert.equal(store.chunkRun,undefined);
+    queryResult=[{id:7,url:'https://example.org/'}];await popup.click('#chunk-start-button');await popup.waitForFunction(()=>document.querySelector('#chunk-feedback').textContent==='Önce Meta Reklam Kütüphanesi sonuç sayfasını aç, sonra başlat.');assert.equal(store.chunkRun,undefined);
+    queryResult=null;
     await popup.fill('#chunk-start', '2026-10-01'); await popup.fill('#chunk-end', '2026-10-02'); await popup.selectOption('#chunk-unit', 'day');
     await popup.click('#chunk-start-button'); await until(() => store.chunkRun?.done.length === 1 && !store.chunkRun.active);
     assert.equal(store.chunkRun.uniqueCount, 2); assert.equal(store.chunkRun.rawCount, 2); assert.equal(telegram.length, 0); assert.equal(store.history?.length || 0, 0);
@@ -89,15 +93,15 @@ const root = path.resolve(__dirname, '..');
     popup = await openPopup(); await popup.waitForFunction(() => document.querySelector('#ad-count').textContent === '2'); assert(!(await popup.locator('#resume-scan').isDisabled()));
     await popup.click('#resume-scan'); await until(() => store.chunkRun?.phase === 'done');
     await popup.waitForFunction(() => document.querySelector('#ad-count').textContent === '3' && !document.querySelector('#export-csv').disabled);
-    assert.equal(opened.length, 2); assert.equal(starts.length, 2); assert(starts.every(msg => msg.settings.maxAds === 800 && msg.settings.autoRefresh === false));
+    assert((await popup.locator('#chunk-url-diagnostics').innerText()).includes('Okunan adres (?): q=%22implant%22'));assert((await popup.locator('#chunk-url-diagnostics').innerText()).includes('İlk parça adresi: https://www.facebook.com/ads/library/'));assert.equal(opened.length, 2); assert.equal(starts.length, 2); assert(starts.every(msg => msg.settings.maxAds === 800 && msg.settings.autoRefresh === false));
     assert.equal(store.chunkRun.rawCount, 4); assert.equal(store.chunkRun.uniqueCount, 3); assert.equal(store.chunkRun.done.length, 2); assert(store.chunkRun.overlap);
-    assert((await popup.locator('#chunk-progress').innerText()).includes('toplam benzersiz: 3')); assert((await popup.locator('#chunk-progress').innerText()).includes('ham: 4')); assert((await popup.locator('#scan-diagnostics').innerText()).includes(ChunkScan.OVERLAP));
+    assert((await popup.locator('#chunk-progress').innerText()).includes('sonuç ~2'));assert((await popup.locator('#chunk-progress').innerText()).includes('toplam benzersiz 3')); assert((await popup.locator('#chunk-progress').innerText()).includes('ham: 4')); assert((await popup.locator('#scan-diagnostics').innerText()).includes(ChunkScan.OVERLAP));
     assert.equal(await popup.getByRole('tab').count(), 4); assert.equal(await popup.locator('.live-counter').count(), 2);
     for (const format of ['csv', 'json', 'excel']) {
       const pending = popup.waitForEvent('download'); await popup.click('#export-' + format); const download = await pending; const data = fs.readFileSync(await download.path());
-      if (format === 'json') { const rows = JSON.parse(data.toString()); assert.equal(rows.length, 3); assert.deepEqual(Object.keys(rows[0]), AdData.COLUMNS); }
+      if (format === 'json') { const rows = JSON.parse(data.toString()); assert.equal(rows.length, 3); assert.deepEqual(Object.keys(rows[0]), [...AdData.COLUMNS,'Sıra (gösterim sıralaması)','Parça (tarih aralığı)']);assert.equal(rows[0]['Sıra (gösterim sıralaması)'],1);assert.equal(rows[0]['Parça (tarih aralığı)'],'2026-10-01'); }
       if (format === 'csv') { assert(data.subarray(0, 3).equals(Buffer.from([239, 187, 191]))); assert(data.toString().includes('"Reklam ID","Reklam Veren","Hook"')); assert(data.toString().includes('123456789013')); }
-      if (format === 'excel') { assert.equal(data.subarray(0, 2).toString(), 'PK'); assert(data.includes(Buffer.from('Reklamlar'))); assert(download.suggestedFilename().endsWith('.xlsx')); }
+      if (format === 'excel') { assert.equal(data.subarray(0, 2).toString(), 'PK'); assert(data.includes(Buffer.from('Reklamlar'))); assert(download.suggestedFilename().endsWith('.xlsx'));assert(data.includes(Buffer.from('Sıra (gösterim sıralaması)')));assert(data.includes(Buffer.from('A1:M4'))); }
     }
     await worker.enqueue(() => service.report()); await worker.enqueue(() => service.report()); assert.equal(telegram.length, 1); assert(telegram[0].text.includes('Toplam benzersiz reklam: 3')); assert(telegram[0].text.includes('Taranan parça: 2')); assert.deepEqual(errors, []);
     console.log('PASS: unchanged content.js scans two foreground date chunks, durable resume after popup/browser restart, raw 4 / unique 3, overlap diagnosis, existing counter IDs and CSV/JSON/XLSX schema, one final Telegram summary.');

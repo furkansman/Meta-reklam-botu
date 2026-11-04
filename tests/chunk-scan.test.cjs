@@ -8,7 +8,7 @@ const config = { start: '2026-10-01', end: '2026-10-02', unit: 'day', limit: 800
 function harness(shared = {}, worker = false) {
   const store = shared.store || {}, sessionStore = shared.sessionStore || {}, events = {}, alarms = new Map(), tabs = shared.tabs || new Map();
   const writes = [], requests = [], probes = [], telegram = [], progress = [], removed = [];
-  let time = Date.parse('2026-11-04T12:00:00Z'), index = 20, queue = Promise.resolve(), runtimeListener, statusRunning = true, poolFailures = 0;
+  let time = Date.parse('2026-11-04T12:00:00Z'), index = 20, queue = Promise.resolve(), runtimeListener, statusRunning = true, poolFailures = 0, rankOrder = [];
   const event = name => ({ addListener(fn) { (events[name] ||= []).push(fn); if (name === 'message') runtimeListener = fn; } });
   const chrome = {
     runtime: { id: 'test', getURL: p => 'chrome-extension://test/' + p, async sendMessage() {}, onMessage: event('message'), onStartup: event('startup'), onInstalled: event('installed') },
@@ -18,7 +18,7 @@ function harness(shared = {}, worker = false) {
     },
     tabs: { async query() { return [{ id: 7, url: shared.url || source }]; }, async create(value) { const tab = { ...value, id: index++, status: 'loading' }; tabs.set(tab.id, tab); return tab; }, async get(id) { if (!tabs.has(id)) throw Error('missing'); return tabs.get(id); }, async remove(id) { removed.push(id); tabs.delete(id); }, async sendMessage(id, message) { requests.push({ id, ...message }); if (message.type === 'META_SCAN_STATUS') return { running: statusRunning, sessionId: store.chunkRun?.active?.sessionId || store.scan?.sessionId, version: '0.9.1' }; return { ok: true }; }, onUpdated: event('updated'), onRemoved: event('removed') },
     alarms: { async create(name, value) { alarms.set(name, value); }, async clear(name) { alarms.delete(name); }, onAlarm: event('alarm') },
-    scripting: { async executeScript(input) { requests.push(input); if (input.files) return []; const active = store.chunkRun.active; return [{ result: { blocked: false, total: 2, url: tabs.get(active.tabId).url, ...probes.shift() } }]; } },
+    scripting: { async executeScript(input) { requests.push(input); if (input.files) return []; if(input.func?.name==='rankPage')return [{result:rankOrder}]; const active = store.chunkRun.active; return [{ result: { blocked: false, total: 2, url: tabs.get(active.tabId).url, ...probes.shift() } }]; } },
     notifications: { onButtonClicked: event('button') }
   };
   const enqueue = task => { const result = queue.then(task); queue = result.catch(() => {}); return result; };
@@ -33,7 +33,7 @@ function harness(shared = {}, worker = false) {
     send, command: message => new Promise(resolve => runtimeListener(message, { id: 'test', url: 'chrome-extension://test/popup.html' }, resolve)),
     async loaded(total = 2) { probes.push({ total }); await service.loaded(store.chunkRun.active.tabId); },
     async next() { time = Math.max(time, store.chunkRun.nextAt); await service.next(); },
-    advance(ms) { time += ms; }, async idle() { await queue; }, setStatus(value) { statusRunning = value; }, failPoolOnce(){poolFailures=1;}
+    advance(ms) { time += ms; }, async idle() { await queue; }, setStatus(value) { statusRunning = value; }, failPoolOnce(){poolFailures=1;}, setOrder(ids){rankOrder=ids;}
   };
 }
 const ad = (id, startDate = '2026-10-01') => ({ id: String(id), advertiser: 'Marka', fullText: 'Diş tedavisinde yeni çözüm.', hook: 'Diş tedavisinde yeni çözüm.', headline: 'Teklif', cta: 'Get Quote', startDate, mediaType: 'image', mediaUrl: 'https://example.org/ad.jpg', targetUrl: 'https://example.org/' });
@@ -48,16 +48,21 @@ test('date ranges are inclusive, disjoint and cover days/weeks/calendar months i
   assert.throws(() => api.settings({ ...config, start: '2026-02-30' }));
   assert.throws(() => api.settings({ ...config, waitMin: 40, waitMax: 20 }));
 });
-test('learn only observed date names; retain keyword, country, status, duplicate platform values', () => {
-  assert.deepEqual(api.learnDateParams(source), { min: 'start_date[min]', max: 'start_date[max]' });
-  const base = source + '&publisher_platforms[0]=facebook&publisher_platforms[1]=instagram&extra=a&extra=b';
-  const result = new URL(api.pieceUrl(base, api.learnDateParams(base), { start: '2026-10-14', end: '2026-10-20' }));
-  assert.equal(result.searchParams.get('q'), 'implant'); assert.equal(result.searchParams.get('country'), 'TR'); assert.deepEqual(result.searchParams.getAll('extra'), ['a', 'b']);
-  assert.equal(result.searchParams.get('publisher_platforms[1]'), 'instagram'); assert.equal(result.searchParams.get('start_date[max]'), '2026-10-20');
-  assert.throws(() => api.learnDateParams('https://www.facebook.com/ads/library/?q=implant'), /tarih filtresini/);
-  assert.deepEqual(api.learnDateParams('https://www.facebook.com/ads/library/?q=implant', api.learnDateParams(source)), api.learnDateParams(source));
-  assert.deepEqual(api.learnDateParams(source.replaceAll('start_date[min]', 'publish_date[from]').replaceAll('start_date[max]', 'publish_date[to]')), { min: 'publish_date[from]', max: 'publish_date[to]' });
-  assert.throws(() => api.learnDateParams('https://evil.example/?start_date[min]=2026-10-01&start_date[max]=2026-10-02'));
+test('fixed date keys replace raw/encoded/empty duplicates and preserve all other query values', () => {
+  const base = source + '&publisher_platforms[0]=facebook&publisher_platforms[1]=instagram&extra=a&extra=b&start_date%5Bmin%5D=&start_date%5Bmax%5D=';
+  const result = new URL(api.pieceUrl(base, { start: '2026-10-14', end: '2026-10-20' }));
+  const expected=new URL(base);expected.searchParams.delete('start_date[min]');expected.searchParams.delete('start_date[max]');
+  const actual=new URL(result);actual.searchParams.delete('start_date[min]');actual.searchParams.delete('start_date[max]');
+  assert.deepEqual([...actual.searchParams],[...expected.searchParams]);
+  assert.deepEqual(result.searchParams.getAll('start_date[min]'),['2026-10-14']);assert.deepEqual(result.searchParams.getAll('start_date[max]'),['2026-10-20']);
+  assert.equal(new URL(api.pieceUrl('https://www.facebook.com/ads/library/?q=implant',config)).searchParams.get('start_date[min]'),config.start);
+  assert.throws(()=>api.pieceUrl('https://evil.example/ads/library/',config),/Önce Meta Reklam Kütüphanesi sonuç sayfasını aç, sonra başlat/);
+});
+test('user URL produces two complete weekly pieces and keeps quote/exact search/sort parameters',()=>{
+  const input='https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=TR&is_targeted_country=false&media_type=all&q=%22implant%22&search_type=keyword_exact_phrase&sort_data[direction]=desc&sort_data[mode]=total_impressions&start_date[min]=2026-10-21&start_date[max]=2026-11-04';
+  const pieces=api.ranges({...config,start:'2026-10-21',end:'2026-11-04',unit:'week'});
+  assert.deepEqual(pieces.map(p=>[p.start,p.end]),[['2026-10-21','2026-10-27'],['2026-10-28','2026-11-04']]);
+  for(const piece of pieces){const actual=new URL(api.pieceUrl(input,piece)),original=new URL(input);for(const name of ['start_date[min]','start_date[max]']){actual.searchParams.delete(name);original.searchParams.delete(name);}assert.deepEqual([...actual.searchParams],[...original.searchParams]);}
 });
 test('split dates then one-day media then platforms, respect existing filters and terminate', () => {
   const halves = api.split({ start: '2026-10-01', end: '2026-10-07' }, source);
@@ -66,7 +71,7 @@ test('split dates then one-day media then platforms, respect existing filters an
   const platforms = api.split(media[1], source); assert.deepEqual(platforms.map(p => p.platform), ['facebook', 'instagram']);
   assert.deepEqual(api.split(platforms[0], source), []); assert.equal(api.label(media[1]), '2026-10-20 · video');
   assert.deepEqual(api.split(media[1], source + '&publisher_platforms[0]=facebook'), []);
-  const url = new URL(api.pieceUrl(source, api.learnDateParams(source), platforms[0])); assert.equal(url.searchParams.get('media_type'), 'video'); assert.equal(url.searchParams.get('publisher_platforms[0]'), 'facebook');
+  const url = new URL(api.pieceUrl(source, platforms[0])); assert.equal(url.searchParams.get('media_type'), 'video'); assert.equal(url.searchParams.get('publisher_platforms[0]'), 'facebook');
   assert.deepEqual(api.split({ start: '2026-10-20', end: '2026-10-20' }, source.replace('media_type=all', 'media_type=video')).map(p => p.platform), ['facebook', 'instagram']);
 });
 test('TR/EN preflight estimates and zero/no-result text', () => {
@@ -145,12 +150,21 @@ test('unsplittable one-day platform leaves are failed, do not loop or silently c
   assert.equal(h.store.chunkRun.phase, 'done'); assert.equal(h.store.chunkRun.done.length, 4); assert(h.store.chunkRun.done.every(item => item.status === 'failed'));
   assert.equal(h.store.chunkRun.splits.length, 3); assert.equal(h.requests.filter(r => r.type === 'META_SCAN_START').length, 0);
 });
-test('missing learned date names leaves existing data intact; observed names persist for the next run', async () => {
-  const h = harness({ url: 'https://www.facebook.com/ads/library/?q=implant', store: { ads: [ad('123456789012')] } });
-  await assert.rejects(() => h.service.start(config), /Sayfada tarih filtresini/); assert.equal(h.store.ads.length, 1); assert.equal(h.store.chunkRun, undefined);
-  const first = harness(); await first.service.start({ ...config, end: config.start }); await first.loaded(0);
-  const next = harness({ store: first.store, url: 'https://www.facebook.com/ads/library/?q=implant&country=TR' }); await next.service.start(config);
-  assert.equal(new URL([...next.tabs.values()][0].url).searchParams.get('start_date[min]'), config.start);
+test('start needs no existing date fields and reads the explicit source tab when supplied', async () => {
+  const h=harness({url:'https://www.facebook.com/ads/library/?q=implant&sort_data[mode]=total_impressions'});
+  await h.service.start(config);assert.equal(new URL([...h.tabs.values()][0].url).searchParams.get('start_date[min]'),config.start);
+  assert.equal(h.store.chunkRun.firstUrl,[...h.tabs.values()][0].url);
+  const other=harness();other.tabs.set(77,{id:77,url:'https://www.facebook.com/ads/library/?q=correct-window&country=TR'});await other.service.start(config,77);
+  assert.equal(new URL([...other.tabs.values()].at(-1).url).searchParams.get('q'),'correct-window');
+  const bad=harness({url:'https://example.org/',store:{ads:[ad('123456789012')]}});await assert.rejects(()=>bad.service.start(config),/Önce Meta Reklam Kütüphanesi sonuç sayfasını aç, sonra başlat/);assert.equal(bad.store.ads.length,1);
+  await assert.rejects(()=>bad.service.start(config,999),/sekme bulunamadı/);
+});
+test('display order is saved independently of extraction order and retained with the first piece',async()=>{
+  const h=harness();await h.service.start(config);await h.loaded(2);
+  h.setOrder(['123456789013','123456789012']);await h.send({type:'META_SCAN_APPEND',records:[ad('123456789012'),ad('123456789013')]});
+  let view=await h.service.view({chunkRun:h.store.chunkRun,ads:[],scan:{}});assert.equal(view.ads.find(ad=>ad.id==='123456789012').chunkRank,2);assert.equal(view.ads[0].chunkPiece,'2026-10-01');
+  h.setOrder(['123456789014','123456789013','123456789012']);await h.send({type:'META_SCAN_FINISHED',ads:[ad('123456789012'),ad('123456789013'),ad('123456789014')],reason:'meta-exhausted'});
+  view=await h.service.view({chunkRun:h.store.chunkRun,ads:[],scan:{}});assert.equal(view.ads.find(ad=>ad.id==='123456789012').chunkRank,3);
 });
 test('pool writes are append-only 25-record batches and a failed batch preserves acknowledged data for resume', async () => {
   const h = harness(); await h.service.start(config); await h.loaded(100);

@@ -185,3 +185,5 @@ footer { flex-shrink: 0; display: flex; justify-content: space-between; align-it
 .chunk-progress { border-top: 1px solid var(--line); padding-top: 8px; overflow-wrap: anywhere; }
 #chunk-feedback, #chunk-failures { overflow-wrap: anywhere; }
 #chunk-failures { padding-left: 18px; color: var(--ink); }
+
+#chunk-url-diagnostics { white-space: pre-wrap; overflow-wrap: anywhere; }

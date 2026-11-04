@@ -4,7 +4,7 @@
     const $ = selector => document.querySelector(selector);
     const end = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
     $('#chunk-end').value = end(); $('#chunk-end').max = end(); $('#chunk-start').max = end();
-    let populated = false;
+    let populated = false, startError='', attemptedUrl='', firstPreview='';
     const resumable = () => { const run = getState().chunkRun; return Boolean(run?.visible && !run.running && run.phase !== 'done' && run.active?.phase !== 'stopping'); };
     const pieceLabel = piece => `${piece.start}${piece.start !== piece.end ? ' → ' + piece.end : ''}${piece.media ? ' · ' + piece.media : ''}${piece.platform ? ' · ' + piece.platform : ''}`;
     function render() {
@@ -23,17 +23,22 @@
       const visible = Boolean(run?.visible);
       $('#chunk-progress').hidden = !visible;
       $('#chunk-failures').replaceChildren();
-      if (!visible) { $('#chunk-failures').hidden = true; return; }
+      const readUrl=attemptedUrl || (visible?run.baseUrl:'');
+      const first=firstPreview || (visible?run.firstUrl:'');
+      const query=(()=>{try{return new URL(readUrl).search.slice(1)||'(parametre yok)';}catch{return readUrl||'henüz okunmadı';}})();
+      $('#chunk-url-diagnostics').textContent=readUrl||startError ? `Okunan adres (?): ${query}\nİlk parça adresi: ${first||'henüz oluşturulmadı'}${visible&&run.currentUrl?'\nBu parça adresi: '+run.currentUrl:''}` : '';
+      if (!visible) { $('#chunk-failures').hidden = true; if(startError)$('#chunk-feedback').textContent=startError; return; }
       const total = run.done.length + run.queue.length + (active ? 1 : 0);
       const current = active ? run.done.length + 1 : run.done.length || Math.min(1,total);
       const speed = active?.speed ?? (active?.count ? active.count / Math.max((Date.now() - active.startedAt) / 60000, 1 / 60) : run.last?.speed || 0);
       const slow = run.baselineSpeed !== null && speed > 0 && speed < run.baselineSpeed * 0.5;
       const count = active?.count ?? run.last?.count ?? 0;
+      const estimate=active?active.total:run.last?.total;
       const label = active ? pieceLabel(active.piece) : run.last?.label || (run.queue[0] ? pieceLabel(run.queue[0]) : 'Tamamlandı');
       const number = value => value.toLocaleString('tr-TR');
-      $('#chunk-progress').textContent = `Parça ${current}/${total} (${label}) · bu parçada ${number(count)} reklam · toplam benzersiz: ${number(run.uniqueCount)} · ham: ${number(run.rawCount)} · ${Math.round(speed)} reklam/dk${slow ? ' · Hız düştü, sekme öne alınmalı ya da dinlenmeli' : ''}`;
+      $('#chunk-progress').textContent = `Parça ${current}/${total} (${label}) · sonuç ${estimate!=null?'~'+number(estimate):'okunamadı'} · toplanan ${number(count)} · toplam benzersiz ${number(run.uniqueCount)} · ham: ${number(run.rawCount)} · ${Math.round(speed)} reklam/dk${slow ? ' · Hız düştü, sekme öne alınmalı ya da dinlenmeli' : ''}`;
       const notes = [run.phase === 'done' ? 'Parçalı tarama tamamlandı.' : !run.running ? 'Duraklatıldı. Devam Et ile kaldığın parçadan sürdürebilirsin.' : !active ? 'Sonraki parça bekleniyor.' : '', run.overlap ? 'Meta filtresi pencerede yayında olan reklamları getiriyor, parçalar çakışabilir' : '', run.lastError || '', run.notification?.status === 'failed' ? 'Telegram özeti gönderilemedi: ' + run.notification.error : ''];
-      $('#chunk-feedback').textContent = notes.filter(Boolean).join(' ');
+      $('#chunk-feedback').textContent = startError || notes.filter(Boolean).join(' ');
       const failures = run.done.filter(item => item.status === 'failed');
       $('#chunk-failures').hidden = !failures.length;
       for (const item of failures) { const li = document.createElement('li'); li.textContent = `${pieceLabel(item.piece)}: ${item.error}`; $('#chunk-failures').append(li); }
@@ -49,8 +54,16 @@
       if (!$('#chunk-enabled').checked) return;
       const config = { start: $('#chunk-start').value, end: $('#chunk-end').value, unit: $('#chunk-unit').value, limit: Number($('#chunk-limit').value), waitMin: Number($('#chunk-wait-min').value), waitMax: Number($('#chunk-wait-max').value) };
       void perform(event.submitter, async () => {
-        try { await command('START_CHUNKS', { config }); await refreshState(true); }
-        catch (error) { $('#chunk-feedback').textContent = error.message; throw error; }
+        startError='';attemptedUrl='';firstPreview='';$('#feedback').textContent='';$('#chunk-feedback').textContent='Aktif sekme okunuyor…';
+        try {
+          let tab;try{[tab]=await chrome.tabs.query({active:true,currentWindow:true});}catch{throw new Error('sekme bulunamadı: Aktif sekmenin adresi okunamadı.');}
+          if(!Number.isInteger(tab?.id))throw new Error('sekme bulunamadı.');
+          attemptedUrl=tab.url||'';
+          if(!ChunkScan.library(attemptedUrl))throw new Error(ChunkScan.LIBRARY_HELP);
+          const pieces=ChunkScan.ranges(ChunkScan.settings(config));firstPreview=ChunkScan.pieceUrl(attemptedUrl,pieces[0]);render();
+          await command('START_CHUNKS', { config, sourceTabId:tab.id }); await refreshState(true);
+          attemptedUrl=getState().chunkRun?.baseUrl||attemptedUrl;firstPreview=getState().chunkRun?.firstUrl||firstPreview;
+        } catch (error) { startError=error.message;$('#chunk-feedback').textContent=startError;render();throw error; }
       }).then(render);
     });
     function appendDiagnostics(){if(getState().chunkRun?.visible && getState().chunkRun.overlap)$('#scan-diagnostics').textContent+=' · Meta filtresi pencerede yayında olan reklamları getiriyor, parçalar çakışabilir';}
