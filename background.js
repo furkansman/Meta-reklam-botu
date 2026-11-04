@@ -1,7 +1,8 @@
 'use strict';
-if(typeof importScripts==='function')importScripts('ad-data.js','competitor.js');
+if(typeof importScripts==='function')importScripts('ad-data.js','competitor.js','chunk-scan.js');
 
 const DEFAULTS = {
+  chunkRun: null, chunkConfig: null,
   ads: [], scrollCount: 0, history: [], competitors: [], competitorStats: {},
   settings: { autoScroll: true, speed: 'medium', maxAds: 100 },
   telegramStatus: { enabled: false, tokenConfigured: false, chatId: '' },
@@ -27,7 +28,8 @@ async function readState() {
   if(saved.scanBatches?.keys?.length){const chunks=await chrome.storage.local.get(saved.scanBatches.keys);saved.ads=[...new Map([...(saved.ads||[]),...saved.scanBatches.keys.flatMap(key=>chunks[key]||[])].map(ad=>[ad.id,ad])).values()];}
   const config=saved.telegramConfig;delete saved.telegramConfig;
   if(config)saved.telegramStatus={enabled:Boolean(config.enabled),tokenConfigured:Boolean(config.token),tokenSuffix:config.token?.slice(-4)||'',chatId:config.chatId||''};
-  return { ...DEFAULTS, ...saved };
+  const state = { ...DEFAULTS, ...saved };
+  return chunkService ? chunkService.view(state) : state;
 }
 function isLibrary(value) {
   try { const url = new URL(value); return url.origin === 'https://www.facebook.com' && /^\/ads\/library\/?$/.test(url.pathname); }
@@ -123,6 +125,7 @@ function sanitizeDiscovery(value) {
 }
 async function handle(message, sender) {
   const type = message?.type;
+  if(sender.tab && chunkService && await chunkService.owns(sender,message))return chunkService.content(message,sender);
   const state=['SCAN_PROGRESS','META_SCAN_APPEND'].includes(type)?{...DEFAULTS,...await chrome.storage.local.get(['scan','settings','scrollCount','scanBatches'])}:await readState();
   if(sender.tab&&competitorService&&await competitorService.owns(sender,message))return competitorService.content(message,sender);
   // Content scripts can only report results for their own active session.
@@ -178,12 +181,15 @@ async function handle(message, sender) {
   }
   if (sender.url !== chrome.runtime.getURL('popup.html')) throw new Error('Bilinmeyen mesaj kaynağı.');
   if(competitorService&&['ADD_COMPETITOR','REMOVE_COMPETITOR','WATCH_START','WATCH_SETTINGS'].includes(type))return competitorService.command(message);
+  if(chunkService && type==='START_CHUNKS')return chunkService.start(message.config);
+  if(chunkService && type==='RESUME_CHUNKS')return chunkService.resume();
+  if(chunkService && type==='STOP_SCAN' && state.chunkRun?.running)return chunkService.pause();
   switch (type) {
-    case 'GET_STATE': { const current = await reconcile(); await publishProgress(current); return { ok:true, state:current }; }
+    case 'GET_STATE': { const current = await reconcile(); if(chunkService && current.chunkRun?.visible)await chunkService.progress(current.chunkRun);else await publishProgress(current); return { ok:true, state:current }; }
     case 'START_SCAN':
     case 'RESUME_SCAN': {
       const current = await reconcile();
-      if (current.scan.running) throw new Error('Önce çalışan taramayı durdur.');
+      if (current.scan.running || current.chunkRun?.running) throw new Error('Önce çalışan taramayı durdur.');
       const settings = validateSettings(message.settings || current.settings);
       const resuming = type === 'RESUME_SCAN';
       if(resuming && !current.ads.length)throw new Error('Devam edilecek kayıt yok.');
@@ -196,7 +202,8 @@ async function handle(message, sender) {
         await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['ad-data.js','scan-loop.js','content.js'] });
         collector = await chrome.tabs.sendMessage(tab.id, { type: 'META_SCAN_STATUS' }, { frameId: 0 });
       }
-      if (collector?.version !== '0.9.1') throw new Error('Meta sekmesinde eski tarama kodu çalışıyor. Sayfayı yenile; panelde v0.9.1 görünmelidir.');
+      if (collector?.version !== '0.9.1') throw new Error('Meta sekmesinde eski tarama kodu çalışıyor. Meta sekmesini yenile ve eklentinin güncel sürümünü yüklediğinden emin ol.');
+      if(chunkService)await chunkService.hide();
       const scan = { running: true, stopping: false, tabId: tab.id, sessionId: crypto.randomUUID(),
         sourceUrl: tab.url, startedAt: Date.now(), updatedAt: Date.now(), reason: 'running' };
       // Save ownership before starting; queued progress cannot overtake this write.
@@ -241,7 +248,8 @@ async function handle(message, sender) {
       return { ok: true };
     }
     case 'CLEAR_RESULTS':
-      if ((await reconcile()).scan.running) throw new Error('Önce taramayı durdur.');
+      if ((await reconcile()).scan.running || state.chunkRun?.running) throw new Error('Önce taramayı durdur.');
+      if(chunkService && state.chunkRun?.visible)await chunkService.clear();
       await chrome.storage.local.set({ ads: [], scrollCount: 0, scan: { running: false, reason: '' },scanBatches:null });
       if(state.scanBatches?.keys?.length)await chrome.storage.local.remove(state.scanBatches.keys);
       await publishProgress({ ...state, ads:[], scrollCount:0, scan:{running:false,reason:''} });
@@ -427,6 +435,7 @@ chrome.runtime.onStartup.addListener(scheduleDelivery);
 chrome.runtime.onInstalled.addListener(scheduleDelivery);
 
 const competitorService=globalThis.CompetitorWatch?CompetitorWatch.create(chrome,{enqueue,sendTelegram}):null;
+const chunkService=globalThis.ChunkScan?ChunkScan.create(chrome,{enqueue,sendTelegram,publishProgress}):null;
 
 async function resumeRefresh(tabId){
  const state=await readState();if(!state.scan.running||!state.scan.refreshing||state.scan.tabId!==tabId)return;

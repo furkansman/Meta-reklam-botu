@@ -171,3 +171,17 @@ footer { flex-shrink: 0; display: flex; justify-content: space-between; align-it
 #watch-error, .watch-error { color: #c43140; }
 :root[data-theme="dark"] #watch-error, :root[data-theme="dark"] .watch-error { color: #ff929e; }
 #competitor-list li > strong, #competitor-list li > small, #competitor-list details { flex: 1 1 100%; }
+
+/* Optional manager controls; existing scan cards and counters retain their styles. */
+.chunk-controls { margin-bottom: 12px; }
+.chunk-controls > .toggle { margin-bottom: 10px; }
+.chunk-controls fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.chunk-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 10px; }
+.chunk-grid label { min-width: 0; line-height: 1.5; }
+.chunk-grid input, .chunk-grid select { display: block; width: 100%; margin-top: 5px; }
+.chunk-presets { display: flex; gap: 5px; margin-bottom: 12px; }
+.chunk-presets button { flex: 1; padding: 6px 3px; font-size: 10px; }
+#chunk-start-button { width: 100%; }
+.chunk-progress { border-top: 1px solid var(--line); padding-top: 8px; overflow-wrap: anywhere; }
+#chunk-feedback, #chunk-failures { overflow-wrap: anywhere; }
+#chunk-failures { padding-left: 18px; color: var(--ink); }

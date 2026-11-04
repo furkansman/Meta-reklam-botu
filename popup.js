@@ -8,7 +8,7 @@ let ready = false;
 let liveProgress = null;
 let busy = false;
 let refreshQueue = Promise.resolve();
-let state = {competitorProfiles:{},watchSettings:{enabled:false,time:'01:00',notifyUnchanged:true},watchRun:null,watchResults:{},watchReportError:'',watchSchedule:{}, telegramStatus: { enabled: false, tokenConfigured: false, chatId: '' }, ads: [], scrollCount: 0, settings: { autoScroll: true, speed: 'medium', maxAds: 100 }, history: [], competitors: [], competitorStats: {}, filters: { mediaType: 'all', platform: 'all' } };
+let state = {chunkRun:null,chunkConfig:null,competitorProfiles:{},watchSettings:{enabled:false,time:'01:00',notifyUnchanged:true},watchRun:null,watchResults:{},watchReportError:'',watchSchedule:{}, telegramStatus: { enabled: false, tokenConfigured: false, chatId: '' }, ads: [], scrollCount: 0, settings: { autoScroll: true, speed: 'medium', maxAds: 100 }, history: [], competitors: [], competitorStats: {}, filters: { mediaType: 'all', platform: 'all' } };
 
 function activateTab(tab) {
   tabs.forEach((item) => {
@@ -168,6 +168,7 @@ function renderDiagnostics() {
   if(!running && ['no-cards','id-unreadable','incomplete-cards','extraction-failed'].includes(state.scan?.reason))$('#scan-diagnostics').textContent+=` · ${REASONS[state.scan.reason]}`;
   if(discovery?.speed)$('#scan-diagnostics').textContent+=` · Hız: ${Math.round(discovery.speed)} reklam/dk`;
   if(discovery?.slow)$('#scan-diagnostics').textContent+=" · Sayfa ağırlaştı, 'Devam Et' ile sayfayı yenileyip kaldığın yerden devam edebilirsin";
+  chunkUI?.appendDiagnostics();
 }
 function renderScan() {
   renderLiveBar();
@@ -176,7 +177,7 @@ function renderScan() {
   renderDiagnostics();
   $('#export-summary').textContent = `${filteredAds().length} / ${state.ads.length} reklam dışa aktarılacak`;
 
-  $('#resume-scan').disabled=!ready||busy||running||!state.ads.length;
+  $('#resume-scan').disabled=!ready||busy||running||(state.chunkRun?.visible ? !chunkUI?.resumable() : !state.ads.length);
   $('#start-scan').disabled = !ready || busy || running;
   $('#stop-scan').disabled = !ready || busy || !running || Boolean(state.scan?.stopping);
   $('#auto-refresh').disabled=!ready||busy||running;
@@ -187,6 +188,7 @@ function renderScan() {
   $('#export-csv').disabled = !ready || busy || running || filteredAds().length === 0;
   $('#export-excel').disabled = !ready || busy || running || filteredAds().length === 0;
   $('#export-json').disabled = !ready || busy || running || filteredAds().length === 0;
+  chunkUI?.render();
 }
 
 $('#auto-scroll').addEventListener('change', renderScan);
@@ -205,7 +207,7 @@ $('#scan-form').addEventListener('submit', (event) => {
   }).then(renderScan);
 });
 
-$('#resume-scan').addEventListener('click',(event)=>perform(event.currentTarget,async()=>{await command('RESUME_SCAN',{settings:{autoScroll:$('#auto-scroll').checked,autoRefresh:$('#auto-refresh').checked,speed:$('#scroll-speed').value,maxAds:Number($('#max-ads').value)}});await refreshState();}));
+$('#resume-scan').addEventListener('click',(event)=>perform(event.currentTarget,async()=>{await command(chunkUI?.resumable()?'RESUME_CHUNKS':'RESUME_SCAN',{settings:{autoScroll:$('#auto-scroll').checked,autoRefresh:$('#auto-refresh').checked,speed:$('#scroll-speed').value,maxAds:Number($('#max-ads').value)}});await refreshState(Boolean(state.chunkRun?.visible));}));
 
 $('#stop-scan').addEventListener('click', (event) => perform(event.currentTarget, async () => {
   await command('STOP_SCAN');
@@ -338,10 +340,10 @@ const REASONS = {
 };
 function refreshState(reconcile = false) {
   const refresh = async () => {
-  const saved = reconcile ? (await command('GET_STATE')).state : await chrome.storage.local.get(Object.keys(state).concat('scan'));
+  const saved = reconcile || state.chunkRun?.visible ? (await command('GET_STATE')).state : await chrome.storage.local.get(Object.keys(state).concat('scan'));
   const oldScan = state.scan;
   state = { ...state, ...saved };
-  running = Boolean(state.scan?.running);
+  running = Boolean(state.scan?.running || state.chunkRun?.running);
   render();
   if (!running && state.scan?.reason && (oldScan?.running || oldScan?.reason !== state.scan.reason)) feedback(REASONS[state.scan.reason] || '');
   };
@@ -375,7 +377,7 @@ async function init() {
 }
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'session' && changes.scanProgress) applyProgress(changes.scanProgress.newValue);
-  if(area==='local'&&changes.scanBatches){refreshState(true).catch(()=>{});return;}
+  if(area==='local'&&(changes.scanBatches || changes.chunkRun)){refreshState(true).catch(()=>{});return;}
   if (area === 'local' && ['ads', 'scrollCount', 'scan', 'history', 'competitors', 'competitorStats', 'filters', 'telegramStatus','competitorProfiles','watchSettings','watchRun','watchResults','watchReportError','watchSchedule'].some((key) => key in changes)) {
     refreshState().catch(() => feedback('Tarama durumu okunamadı.'));
   }
@@ -424,4 +426,5 @@ function renderDateAnalysis() {
   $('#new-day').textContent = ages.filter((age) => age < 1).length;
   $('#dated-summary').textContent = `${dates.length} / ${state.ads.length} reklamda tarih`;
 }
+const chunkUI=globalThis.ChunkPopup?ChunkPopup.create({command,refreshState,perform,getState:()=>state,isReady:()=>ready,isBusy:()=>busy}):null;
 init();

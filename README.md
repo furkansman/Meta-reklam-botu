@@ -24,7 +24,7 @@ Rakip Takip artık ayrı, kalıcı bir günlük tarama kuyruğu kullanır. Manue
 
 ## Güncel sürümü yükleme
 
-Bu paket **v0.9.1** olarak sürümlenmiştir. `chrome://extensions` üzerinden doğru depo klasöründen yüklenen eklentiyi yenileyin ve açık Meta sekmesini bir kez yeniden yükleyin. Panelin altında v0.9.1 görünmelidir; görünmüyorsa Chrome başka/eski bir klasörü çalıştırıyordur. Worker, eski sayfa betiğini sürüm kontrolüyle saptar ve önceki sonuçları silmeden yenileme ister. Tarama panelindeki aday/kart sayıları güncel betiğin gerçekten hangi kapsayıcıları işlediğini gösterir.
+Bu paket **v0.10.0** olarak sürümlenmiştir. `chrome://extensions` üzerinden doğru depo klasöründen yüklenen eklentiyi yenileyin ve açık Meta sekmesini bir kez yeniden yükleyin. Panelin altında v0.10.0 görünmelidir; görünmüyorsa Chrome başka/eski bir klasörü çalıştırıyordur. Worker, eski sayfa betiğini sürüm kontrolüyle saptar ve önceki sonuçları silmeden yenileme ister. Tarama panelindeki aday/kart sayıları güncel betiğin gerçekten hangi kapsayıcıları işlediğini gösterir.
 
 Kart keşfi artık hiçbir sınıf/border seçicisine dayanmaz. `(Kütüphane Kodu|Library ID)\s*:?\s*(\d{10,})` metninin en küçük eşleşen öğesinden yukarı çıkar; aynı ID ile reklam detayları kontrolünü ve Sponsorlu/Sponsored metninin üstündeki reklamveren adını kapsayan ilk öğeyi seçer. Farklı ID içeren üst sonuç listeleri kart olarak kabul edilmez. Aynı ID bir oturumda yalnızca bir kez saklanır. Türkçe/İngilizce başlangıç tarihleri ISO gün olarak çıkarılır; platform etiketleri ve görsel/video türü de kaydedilir. Eksik tarihler uydurulmaz. Aday/kart teşhisinin yanında sayfadaki “Kütüphane Kodu” metni sayısı gösterilir. Bu kontroller sınıfsız ve rastgele sınıflı DOM örnekleriyle doğrulanmıştır; kullanıcının canlı Meta sayfası bu ortamda incelenmemiştir.
 
@@ -35,6 +35,25 @@ Toplanan veriler 25 yeni reklamlık artımlı paketler halinde `storage.local` i
 **Devam Et** son kalıcı reklam kümesini ve kaydırma sayısını yükleyerek mevcut Meta sekmesinde devam eder; eski ID'ler atlanır. Meta'nın sanallaştırılmış liste konumu otomatik geri getirilemez: sayfa yenilendiyse daha önce yüklenmiş kartların üzerinden geçilmesi gerekebilir. Maksimum sayı kayıtlı reklam sayısından yüksek olmalıdır. Yeni Taramayı Başlat ayrı ve sıfırdan bir taramadır.
 
 Panel `~1.100 sonuç / results` metninden Meta'nın yaklaşık sayısını okur, benzersiz toplanan sayıdan ayrı gösterir. Bu tahmin kesin hedef veya tüm kayıtların erişilebilirlik garantisi değildir. “Birden fazla versiyonu var / multiple versions” etiketi taşıyan kartların her ayrı DOM gösterimi bir karşılaşma sayılır; aynı DOM öğesinin tekrar kontrolü sayılmaz. Bu değer gerçek versiyon adedinin tahmini değildir ve devam edilen yeni sayfa gösterimleri yeni karşılaşma sayılabilir.
+
+## Parçalı tarama
+
+Parça yöneticisi `chunk-scan.js`, ek arayüz bağları `chunk-popup.js` içindedir. `content.js`, `scan-loop.js`, `ad-data.js`, XLSX üreticisi, rakip modülü ve Telegram gönderim fonksiyonu değiştirilmez. Onay kutusu kapalıyken mevcut normal tarama yolu kullanılır. Paketin sürümü v0.10.0, değişmeyen içerik motorunun protokol sürümü v0.9.1'dir.
+
+1. Meta Ad Library'de anahtar kelime, ülke, durum ve platform aramanı yap. Bir kez tarih filtresi uygula. Yönetici, mevcut URL'deki ISO gün değerleri taşıyan eşleşen alt/üst tarih parametrelerinin adlarını öğrenir ve `chunkDateParams` içinde saklar; tahmini adlarla başlamaz. Öğrenilmiş adlar yoksa **Sayfada tarih filtresini bir kez uygulayıp tekrar dene** mesajı gösterilir ve mevcut veriler korunur.
+2. Tarama sekmesinde **Parçalı tarama** seçeneğini aç. Varsayılan başlangıç 2020-09-01, bitiş İstanbul takviminde bugün, parça hafta, sınır 800 reklam, bekleme 20–40 saniyedir. Son 14/30 gün seçimleri bugün dahil bu kadar takvim gününü kapsar. Normal taramanın Maksimum Reklam ayarı birleşik havuzu sınırlamaz.
+3. Yönetici her parçayı ayrı, **öne getirilen** sekmede açar. Kaynak arama parametreleri korunur; tarih alanları değiştirilir. Meta'nın bildirdiği sonuç sınırı aşıyorsa motor başlamadan tarih aralığı ikiye bölünür; sıfır sonuç atlanır. Sonuç okunamazsa mevcut motor çalışır ve sınırda bölme yapılır. Tarihler iki uç dahil, birbirini takip eden aralıklardır; aylık adım takvim ayını kullanır.
+4. Tek günlük yoğun parça önce görsel/video, sonra Facebook/Instagram olarak bölünür. Kaynak aramada zaten daraltılmış medya/platform kapsamı genişletilmez. Bu en küçük alt parça da sınırı aşıyorsa **başarısız** olarak listelenir; erişilmiş veriler korunur. Bu alt filtreler tüm olası medya ve platform türlerini kapsama garantisi vermez. Meta'nın yaklaşık sonucuyla benzersiz toplamın eşit olması garanti edilmez.
+
+Ortak havuz ayrı, en fazla 25 reklamlık `chunk-pool:<oturum>:<paket>` anahtarlarında artımlı yazılır. ID'ler Map ile tekilleştirilir; bir önceki büyük reklam dizisi her pakette yeniden yazılmaz. GET_STATE havuzu mevcut reklam yapısında sunar; dışa aktarma fonksiyonları, sütun adları ve sıralaması aynen kalır. **Ham** sayı aynı ID'nin farklı parçalardaki karşılaşmalarını içerir; aynı parçanın yeniden denemesi ham sayıyı tekrar artırmaz. İlk denemede sınırda bölünen üst parçadaki kayıtlar da havuzda korunur.
+
+Durdur, yeni parçaya geçişi keser ve motorun son paketini kaydetmesini bekler. **Devam Et** bitmemiş parçadan sürdürür; tamamlanmış parçaları tekrar açmaz. Popup kapanınca çalışma devam eder. Chrome yeniden başlayınca kalıcı kuyruk duraklatılır ve Devam Et beklenir. Son henüz onaylanmamış paket eski motorun kayıt davranışına tabidir; devam sırasında yarım parça yeniden taranır, havuzdaki ID'ler çoğaltılmaz. Tarayıcı uyku/suspansiyonunda alarm gecikebilir; bekleme zamanı kalıcıdır.
+
+Yükleme için 45 saniyelik, çalışan parça için 10 dakikalık gözetim vardır. Yüklenmeyen, kesilen veya bildirilen sayıya ulaşamayan parça iki kez yeniden denenir; rastgele bekleme ilk denemede 2, ikincide 4 katına çıkar. Son hata diğer parçaları durdurmaz. Bir günlük alt filtre sınırları ve erişim hataları en sonda tam liste halinde görünür. Depolama hatasında onaylanmış paketler korunarak tarama duraklatılır.
+
+Mevcut REKLAM/SCROLL kutularının altında ek satır parça numarası, tarih/filtre, parça sayısı, benzersiz/ham toplam ve reklam/dakika gösterir. İlk verili parçanın hızının yarısının altına düşünce uyarı çıkar. Başlangıç tarihi okunabilen reklamların %25'inden fazlası parça başlangıcından önceyse teşhiste **Meta filtresi pencerede yayında olan reklamları getiriyor, parçalar çakışabilir** notu gösterilir. Bu durumda tekilleştirme yine ID ile yapılır.
+
+Parça başına normal tarama bitiş/Telegram yolu çağrılmaz. Telegram etkinse tüm kuyruk bittiğinde benzersiz sayı, ham sayı, taranan parça sayısı ve başarısız parçalar için mevcut gönderim fonksiyonunu kullanan tek özet işi oluşur. Tek mesaj sınırını aşan hata listesi eklentide tam, Telegram'da kısaltılmış görünür. Ağ/429/5xx hatalarında rapor en fazla üç gönderim girişimiyle kalıcı olarak yeniden denenir.
 
 ## Artımlı tarama ve sayfa yükü
 
@@ -113,6 +132,7 @@ node tests/background.test.cjs
 node tests/export.test.cjs
 node tests/scan-loop.test.cjs
 node tests/competitor.test.cjs
+node tests/chunk-scan.test.cjs
 ```
 
 Örnek CSV ve XLSX yapısını ayrıca Python `openpyxl` ile doğrulamak için: `python3 tests/verify-export.py` (önce export testini çalıştırın).
@@ -122,6 +142,7 @@ Tarayıcı entegrasyon testi Playwright gerektirir. Geçici bir dizinde kurarak 
 ```sh
 npm install --prefix /tmp/meta-browser-check --no-save playwright
 NODE_PATH=/tmp/meta-browser-check/node_modules CHROMIUM_PATH=/usr/bin/chromium node tests/browser.cjs
+NODE_PATH=/tmp/meta-browser-check/node_modules CHROMIUM_PATH=/usr/bin/chromium node tests/chunk-browser.cjs
 ```
 
 `CHROMIUM_PATH` yerine kurulu Chromium yolunu kullanın veya Playwright'ın kendi Chromium'u kuruluysa değişkeni atlayın. Testler yerel örnek HTML ve Chrome API taklidi kullanır; canlı Facebook veya gerçek Chrome eklenti yüklemesini doğrulamaz. Worker testleri eşzamanlı başlangıçları, yeniden başlatmayı, mesaj kaynaklarını, sekme kaybını, kota hatasını, rakip karşılaştırmasını, arşivleri, Telegram kimlik bilgisi gizliliğini, başarılı/hatalı API yanıtlarını ve yeniden deneme kuyruğunu kapsar. Tarayıcı testi üç betiği birlikte çalıştırarak veri çıkarma, paneli yeniden açma, durdurma, geçmiş, rakip listesi, filtreler arşiv indirmeleri, Telegram formu/test/tamamlanma mesajları ve CSV/JSON içeriğini kontrol eder.
@@ -131,3 +152,5 @@ NODE_PATH=/tmp/meta-browser-check/node_modules CHROMIUM_PATH=/usr/bin/chromium n
 DOM çıkarımı yalnızca en az 10 haneli Kütüphane Kodu/Library ID, detaylar kontrolü ve reklamveren/sponsor başlığı birlikte bulunduğunda kart üretir. Yeni taramalarda parmak iziyle kimliksiz reklam üretilmez. Önceki sürümlerin arşivleri korunur. Meta etiketleri veya dil desteği değişirse uyarlama gerekebilir. Gizli, henüz yüklenmemiş veya erişim gerektiren reklamlar toplanmaz. Metinler yalnızca yüklenmiş kapsamlarıyla alınır. Medya bağlantıları geçici olabilir; reklamveren, platform veya medya bulunamazsa eksik bırakılır. Platformu bilinmeyen kayıtlar yalnızca Tüm platformlar seçeneğine dahil edilir; filtreler eksik medyayı tahmin etmez. CSV metinleri elektronik tablo formüllerinin çalışmasını engellemek için kaçışlanır.
 
 Sonuçlar Chrome'un yerel depolama kotasına tabidir. Bir yazım başarısız olursa tarama durur ve son başarılı kayıt korunur. Canlı Meta sayfası ve gerçek eklenti yüklemesi bu ortamda doğrulanmadı. Kullanım için kendi tarayıcınızda paketlenmemiş eklentiyle kontrol edin.
+
+Parçalı mod testleri tarih sınırlarını, öğrenilmiş parametreleri, ön kontrolü, tarih/medya/platform bölünmesini, tekilleştirmeyi, hız/çakışma teşhisini, iki yeniden denemeyi, sekme kimliği güvenliğini, kayıt hatasını ve normal moda geri dönüşü kapsar. Yeni Chromium testi değiştirilmemiş içerik motoruyla iki gerçek test sekmesini tarar; popup/tarayıcı yeniden başlangıcından devam ederek ham 4 / benzersiz 3 sonucunu, CSV/JSON/XLSX şemasını ve tek Telegram özetini doğrular. Meta yanıtları ve Chrome API'leri kontrollü taklitlerdir; canlı Meta oturumunda test yapılmaz.

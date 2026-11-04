@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="popup.css">
   <script src="ad-data.js" defer></script>
   <script src="xlsx.js" defer></script>
+  <script src="chunk-popup.js" defer></script>
   <script src="popup.js" defer></script>
 </head>
 <body class="popup-body">
@@ -32,6 +33,7 @@
             <div class="live-counter live-counter-ads"><strong id="ad-count">0</strong><span>REKLAM</span></div>
             <div class="live-counter live-counter-scroll"><strong id="scroll-count">0</strong><span>SCROLL</span></div>
           </div>
+          <p id="chunk-progress" class="hint chunk-progress" role="status" hidden></p>
         </section>
         <form id="scan-form" class="scan-controls card">
           <div class="scan-actions form-grid">
@@ -44,6 +46,29 @@
           </div>
           <label class="toggle"><input id="auto-refresh" type="checkbox"> Ağırlaşınca otomatik yenile (300 reklamda bir)</label>
           <div class="maximum-row box"><label for="max-ads">Maksimum Reklam:</label><input id="max-ads" type="number" min="1" max="10000" step="1" value="100" required></div>
+        </form>
+        <form id="chunk-form" class="card chunk-controls" aria-label="Parçalı tarama ayarları">
+          <label class="toggle"><input id="chunk-enabled" type="checkbox"> Parçalı tarama</label>
+          <fieldset id="chunk-fields" disabled hidden>
+            <div class="chunk-grid">
+              <label>Başlangıç tarihi<input id="chunk-start" type="date" value="2020-09-01" required></label>
+              <label>Bitiş tarihi<input id="chunk-end" type="date" required></label>
+            </div>
+            <div class="chunk-presets" aria-label="Hızlı tarih seçimi">
+              <button type="button" class="secondary" data-chunk-days="14">Son 14 gün</button>
+              <button type="button" class="secondary" data-chunk-days="30">Son 30 gün</button>
+              <button type="button" class="secondary" data-chunk-days="all">Tüm zamanlar</button>
+            </div>
+            <div class="chunk-grid">
+              <label>Parça uzunluğu<select id="chunk-unit"><option value="day">Gün</option><option value="week" selected>Hafta</option><option value="month">Ay</option></select></label>
+              <label>Parça başına en fazla reklam<input id="chunk-limit" type="number" min="1" max="10000" value="800" required></label>
+              <label>En az bekleme (sn)<input id="chunk-wait-min" type="number" min="1" max="3600" value="20" required></label>
+              <label>En çok bekleme (sn)<input id="chunk-wait-max" type="number" min="1" max="3600" value="40" required></label>
+            </div>
+            <button id="chunk-start-button" class="primary" type="submit">Parçalı taramayı başlat</button>
+          </fieldset>
+          <p id="chunk-feedback" class="hint" role="status" aria-live="polite"></p>
+          <ul id="chunk-failures" class="hint" hidden aria-label="Başarısız parçalar"></ul>
         </form>
         <button id="resume-scan" class="secondary" type="button" disabled>Devam Et</button>
         <p id="meta-totals" class="hint"></p>
@@ -118,7 +143,7 @@
     </section>
       <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
     </main>
-    <footer><span class="footer-brand">Meta Reklam Botu</span><span class="footer-state"><i aria-hidden="true"></i> Yerel çalışma alanı</span><span>v0.9.1</span></footer>
+    <footer><span class="footer-brand">Meta Reklam Botu</span><span class="footer-state"><i aria-hidden="true"></i> Yerel çalışma alanı</span><span>v0.10.0</span></footer>
   </div>
 </body>
 </html>
