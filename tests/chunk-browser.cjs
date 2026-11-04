@@ -4,7 +4,7 @@ const { webcrypto } = require('node:crypto'), path = require('node:path');
 const ChunkScan = require('../chunk-scan.js'), AdData = require('../ad-data.js'), CompetitorWatch = require('../competitor.js');
 const root = path.resolve(__dirname, '..');
 (async () => {
-  const files = ['popup.html', 'popup.css', 'popup.js', 'chunk-popup.js', 'chunk-scan.js', 'chunk-export.js', 'sidepanel-launch.js', 'sidepanel.html', 'sidepanel.js', 'sidepanel.css', 'ad-data.js', 'xlsx.js'];
+  const files = ['popup.html', 'popup.css', 'popup.js', 'chunk-popup.js', 'chunk-scan.js', 'chunk-export.js', 'sidepanel-launch.js','page-lightener-ui.js', 'sidepanel.html', 'sidepanel.js', 'sidepanel.css', 'ad-data.js', 'xlsx.js'];
   const server = http.createServer((req, res) => {
     const file = req.url === '/' ? 'popup.html' : req.url.slice(1);
     if (!files.includes(file)) { res.writeHead(404); res.end(); return; }
@@ -78,13 +78,13 @@ const root = path.resolve(__dirname, '..');
       const popup = await context.newPage(); pages.push(popup); popup.on('pageerror', error => errors.push(error.message));
       await popup.exposeFunction('runtimeSend', msg => send(msg, { id: 'test', url: 'chrome-extension://test/popup.html' }));
       await popup.exposeFunction('localGet', keys => chrome.storage.local.get(keys)); await popup.exposeFunction('localSet', values => chrome.storage.local.set(values)); await popup.exposeFunction('sessionGet', keys => chrome.storage.session.get(keys));await popup.exposeFunction('tabsQuery', query=>chrome.tabs.query(query));await popup.exposeFunction('panelOpen',value=>chrome.sidePanel.open(value));
-      await popup.addInitScript(() => { window.chrome = { windows:{getCurrent:async()=>({id:7})},sidePanel:{open:panelOpen},tabs:{query:tabsQuery}, runtime: { id: 'test', sendMessage: runtimeSend, onMessage: { addListener(fn) { window.progressListener = fn; } } }, storage: { local: { get: localGet, set: localSet }, session: { get: sessionGet }, onChanged: { addListener(fn) { window.changeListener = fn; } } } }; });
+      await popup.addInitScript(() => { window.chrome = { windows:{getCurrent:async()=>({id:7})},sidePanel:{open:panelOpen},tabs:{query:tabsQuery}, runtime: { id: 'test', sendMessage: runtimeSend, onMessage: { addListener(fn) { window.progressListener = fn; } } }, storage: { local: { get: localGet, set: localSet }, session: { get: sessionGet }, onChanged: { addListener(fn) { const old=window.changeListener;window.changeListener=(...args)=>{old?.(...args);fn(...args)}; } } } }; });
       await popup.goto(`http://127.0.0.1:${server.address().port}/`); await popup.waitForFunction(() => !document.querySelector('#start-scan').disabled || document.querySelector('#scan-dot').classList.contains('scanning')); return popup;
     }
     const until = async predicate => { for (let i = 0; i < 1000; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 10)); } throw Error('Timed out: ' + JSON.stringify(store.chunkRun)); };
     const panel=await context.newPage();panel.on('pageerror',error=>errors.push(error.message));await panel.setViewportSize({width:360,height:720});
     await panel.exposeFunction('localGet',keys=>chrome.storage.local.get(keys));await panel.exposeFunction('sessionGet',keys=>chrome.storage.session.get(keys));
-    await panel.addInitScript(()=>{window.chrome={storage:{local:{get:localGet},session:{get:sessionGet}}};});await panel.goto(`http://127.0.0.1:${server.address().port}/sidepanel.html`);
+    await panel.addInitScript(()=>{window.chrome={storage:{local:{get:localGet},session:{get:sessionGet},onChanged:{addListener(){}}}};});await panel.goto(`http://127.0.0.1:${server.address().port}/sidepanel.html`);
     let popup = await openPopup();
     assert.equal(await popup.locator('#chunk-start').inputValue(), '2020-09-01'); assert.equal(await popup.locator('#chunk-end').inputValue(), ChunkScan.today());
     assert.equal(await popup.locator('#chunk-unit').inputValue(), 'week'); assert.equal(await popup.locator('#chunk-limit').inputValue(), '800'); assert(await popup.locator('#chunk-fields').isHidden());

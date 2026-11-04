@@ -24,7 +24,7 @@ Rakip Takip artık ayrı, kalıcı bir günlük tarama kuyruğu kullanır. Manue
 
 ## Güncel sürümü yükleme
 
-Bu paket **v0.11.0** olarak sürümlenmiştir. `chrome://extensions` üzerinden doğru depo klasöründen yüklenen eklentiyi yenileyin ve açık Meta sekmesini bir kez yeniden yükleyin. Panelin altında v0.11.0 görünmelidir; görünmüyorsa Chrome başka/eski bir klasörü çalıştırıyordur. Worker, eski sayfa betiğini sürüm kontrolüyle saptar ve önceki sonuçları silmeden yenileme ister. Tarama panelindeki aday/kart sayıları güncel betiğin gerçekten hangi kapsayıcıları işlediğini gösterir.
+Bu paket **v0.12.0** olarak sürümlenmiştir. `chrome://extensions` üzerinden doğru depo klasöründen yüklenen eklentiyi yenileyin ve açık Meta sekmesini bir kez yeniden yükleyin. Panelin altında v0.12.0 görünmelidir; görünmüyorsa Chrome başka/eski bir klasörü çalıştırıyordur. Worker, eski sayfa betiğini sürüm kontrolüyle saptar ve önceki sonuçları silmeden yenileme ister. Tarama panelindeki aday/kart sayıları güncel betiğin gerçekten hangi kapsayıcıları işlediğini gösterir.
 
 Kart keşfi artık hiçbir sınıf/border seçicisine dayanmaz. `(Kütüphane Kodu|Library ID)\s*:?\s*(\d{10,})` metninin en küçük eşleşen öğesinden yukarı çıkar; aynı ID ile reklam detayları kontrolünü ve Sponsorlu/Sponsored metninin üstündeki reklamveren adını kapsayan ilk öğeyi seçer. Farklı ID içeren üst sonuç listeleri kart olarak kabul edilmez. Aynı ID bir oturumda yalnızca bir kez saklanır. Türkçe/İngilizce başlangıç tarihleri ISO gün olarak çıkarılır; platform etiketleri ve görsel/video türü de kaydedilir. Eksik tarihler uydurulmaz. Aday/kart teşhisinin yanında sayfadaki “Kütüphane Kodu” metni sayısı gösterilir. Bu kontroller sınıfsız ve rastgele sınıflı DOM örnekleriyle doğrulanmıştır; kullanıcının canlı Meta sayfası bu ortamda incelenmemiştir.
 
@@ -38,7 +38,7 @@ Panel `~1.100 sonuç / results` metninden Meta'nın yaklaşık sayısını okur,
 
 ## Parçalı tarama
 
-Parça yöneticisi `chunk-scan.js`, ek arayüz bağları `chunk-popup.js` içindedir. `content.js`, `scan-loop.js`, `ad-data.js`, rakip modülü ve Telegram gönderim fonksiyonu korunur. XLSX üreticisinde yalnızca isteğe bağlı iki ek sütun desteği bulunur; normal çıktı aynı kalır. Onay kutusu kapalıyken mevcut normal tarama yolu kullanılır. Paketin sürümü v0.11.0, değişmeyen içerik motorunun protokol sürümü v0.9.1'dir.
+Parça yöneticisi `chunk-scan.js`, ek arayüz bağları `chunk-popup.js` içindedir. `content.js`, `scan-loop.js`, `ad-data.js`, rakip modülü ve Telegram gönderim fonksiyonu korunur. XLSX üreticisinde yalnızca isteğe bağlı iki ek sütun desteği bulunur; normal çıktı aynı kalır. Onay kutusu kapalıyken mevcut normal tarama yolu kullanılır. Paketin sürümü v0.12.0, değişmeyen içerik motorunun protokol sürümü v0.9.2'dir.
 
 1. Meta Ad Library'de aramanı yap; adreste önceden tarih parametresi bulunması gerekmez. Başlatırken popup kendi penceresindeki aktif sekmeyi `chrome.tabs.query` ile okur; yönetici bu sekmenin ID'sini kullanır. Her parçada `start_date[min]` ve `start_date[max]` adları ve YYYY-MM-DD biçimi kullanılır. Mevcut tarih alanları boş veya kodlu olsa da silinip yeni parçanın tarihleri eklenir. Diğer arama, sıralama ve filtre değerleri korunur; parametre adı öğrenilmez/saklanmaz. Meta sonuç sayfası dışında açık bir uyarı verilir.
 2. Tarama sekmesinde **Parçalı tarama** seçeneğini aç. Varsayılan başlangıç 2020-09-01, bitiş İstanbul takviminde bugün, parça hafta, sınır 800 reklam, bekleme 20–40 saniyedir. Son 14/30 gün seçimleri bugün dahil bu kadar takvim gününü kapsar. Normal taramanın Maksimum Reklam ayarı birleşik havuzu sınırlamaz.
@@ -60,6 +60,21 @@ Parça başına normal tarama bitiş/Telegram yolu çağrılmaz. Telegram etkins
 Popup ayarlar için korunur. **Yan paneli aç** butonunu kullanarak ilerlemeyi pencereye bağlı kalıcı Chrome yan panelinde izle. Normal popup odak değişince kapanabilir; yan panel popup yaşam süresine bağlı değildir. Tarama penceresindeki izleme sekmesi de aynı görünümü sunar. Yan panel her saniye yalnızca tarama durumu, son 100 olay ve sayaçları okur; büyük reklam havuzunu ya da Telegram kimlik bilgilerini yüklemez. Açık/koyu tema ve mevcut REKLAM/SCROLL görünümü korunur.
 
 `chunkEvents` yerel depoda saat, parça etiketi, olay ve sebep içeren en yeni 100 kaydı tutar. Parça başlangıcı, pencere/sekme açılışı, yükleme, PING hazırlığı, sonuç sayısı, tarama başlangıcı, bitiş, bölünerek atlama, hata, teşhis beklemesi, yeniden deneme ve kapanış kaydedilir. Başarısız parçalar ayrıca yan panelde listelenir. Rozet benzersiz sayıyı (örn. 2.1k) veya başarısızlıkta kırmızı ! gösterir. Simgedeki ayar popup'ı korunmak için `openPanelOnActionClick:false` kullanılır; yan panel doğrudan butonun kullanıcı tıklamasından açılır.
+
+## Sayfayı hafifletme ve deneysel medya engelleme
+
+Yeni DOM müdahalesi `page-lightener.js`, sekmeye bağlı ağ kuralları `page-lightener-worker.js`, ayarlar/teşhis `page-lightener-ui.js` içindedir. Kart bulma, ID/hook/başlık/CTA/tarih/medya ayrıştırması, `scan-loop.js`, çıktı üreticileri, parça yöneticisi ve rakip modülü korunur. `content.js` içinde sadece başlatma, çıkarılmış kartı izleme, kayıt onayı, kaydırma ölçümü, geri dönüştürülen öğeyi hazırlama ve bitiş çağrıları vardır. İçerik protokol sürümü v0.9.2'dir.
+
+- **Sayfayı hafiflet** varsayılan açıktır. DOM'dan çıkarılmış olmak yeterli değildir: 25 kayıt paketine worker başarı yanıtı verdikten sonra kart hafifletmeye uygun sayılır. Önceki/okunamayan/hatalı kartlar bu onayı almadan değiştirilmez.
+- Son 60 işlenen kart ve görünür kartlar korunur. Her 20 yeni onaylı kayıtta eski uygun kartlar toplu işlenir; her kaydırmada tüm DOM yeniden taranmaz. Toplu işlemde bütün yükseklikler yazma işleminden önce ölçülür; kart başına ölç/yaz döngüsüyle yerleşim hesabı tekrarlanmaz. Kartın ölçülen dış yüksekliği `box-sizing:border-box` ve sabit height ile korunur. Img src/srcset, picture kaynakları ve video src/poster kaldırılır; video pause/load çağrılır, video source öğeleri geri yüklemek üzere saklanarak çıkarılır. Kart/metin/ID/düğmeler DOM'da kalır; content-visibility:auto ve contain-intrinsic-size uygulanır.
+- İlk üç kaydırma müdahalesiz ölçülür. Bu referans oluşmadan agresif medya budama veya ağ engelleme başlamaz; kaydırmasız taramada bu emniyet nedeniyle medya budanmayabilir. Müdahaleden sonraki üç kaydırmanın ortalama yeni benzersiz reklam/saniye değeri referansın %30'undan azsa özellikler o tarama için kapatılır. **Hafifletme kapatıldı: yükleme düştü** teşhisi yazılır; ağ kuralları kaldırılır ve yeni müdahale durur. Yüzlerce medyayı birden yeniden indirmemek için daha önce hafifletilmiş kartlar korunur; sonraki yeni taramadan önce geri yüklenir. Bu korelasyon yükleme düşüşünün nedenini ispatlamaz; emniyet için durdurur.
+- Kart bazındaki DOM/medya hataları sayılır ve diğer kartlara devam edilir. Aynı öğeye ikinci kez müdahale edilmez. Meta bir öğeyi farklı ID için yeniden kullanırsa eski stiller açılır, eski reklamın kaynakları yeni karta geri yazılmaz. Yeni sıfırdan taramadan önce önceki hafifletmenin kaynakları/stilleri geri yüklenir; havuza yazılan URL'ler değişmez.
+
+**Medya yüklemeyi engelle (deneysel)** ayrı ve varsayılan kapalıdır. `declarativeNetRequest` izni kullanır. Chrome `tabIds` koşulunu kalıcı dynamic rules üzerinde desteklemediği için programatik **session rules** kullanılır: yalnızca tarama sekmesinde, yalnızca fbcdn.net/fbsbx.com ve alt alanlarında image/media/font engellenir. Script/HTML/XHR engellenmez, diğer sekmelere veya pencereye genel kural konmaz. Engelleme indirme isteğini etkiler; DOM'daki kaynak adreslerini değiştirmez. Boş medya URL sayısı teşhiste görünür. Gerçek Chrome/CDN davranışı kontrollü test taklitleriyle garanti edilemez; bu yüzden deneysel seçeneği ayrı değerlendirin.
+
+Kurallar bitiş/durdurma, sekme kapanması, navigasyon/yenileme ve geçersiz kalan oturumlarda temizlenir. Worker yeniden başlayınca yalnızca hâlâ geçerli oturumların kuralları korunur; yetim kurallar kaldırılır. Kural silme hatasında durdurulmuş kayıt ve yeniden temizleme alarmı tutulur; veri kaydı başarısız sayılmaz. Ayarlar `pageLightenerSettings`, son durum `pageLightenerStatus`, son 100 karşılaştırma satırı `pageLightenerLog` içinde yereldir. Bu anahtarlar dışa aktarmalara ve Chrome Sync'e eklenmez. Rakip taramaları bu özellikleri atlayarak mevcut davranışını korur.
+
+Her 50 onaylı reklamda son 50'nin saniyesi ve reklam/dakika ölçülür. Teşhis hafifletilen kart, hata, boş medya URL sayısı ve varsa `performance.memory.usedJSHeapSize` üzerinden yaklaşık **JS bellek** MB gösterir; bu değer tüm video/GPU belleği değildir. Her 200 kayıtta ve otomatik kapatmada açık/kapalı durum ile hız günlüğe yazılır. Popup ve yan panelde ek teşhis/günlük alanı bulunur; mevcut sayaçlar değişmez. İki seçenek de kapalıyken eski 100 kartlık salt çizim hafifletmesi ve tarama yolu aynen kullanılır.
 
 ## Artımlı tarama ve sayfa yükü
 
@@ -140,6 +155,7 @@ node tests/scan-loop.test.cjs
 node tests/competitor.test.cjs
 node tests/chunk-scan.test.cjs
 node tests/chunk-export.test.cjs
+node tests/page-lightener.test.cjs
 ```
 
 Örnek CSV ve XLSX yapısını ayrıca Python `openpyxl` ile doğrulamak için: `python3 tests/verify-export.py` (önce export testini çalıştırın).
@@ -150,6 +166,9 @@ Tarayıcı entegrasyon testi Playwright gerektirir. Geçici bir dizinde kurarak 
 npm install --prefix /tmp/meta-browser-check --no-save playwright
 NODE_PATH=/tmp/meta-browser-check/node_modules CHROMIUM_PATH=/usr/bin/chromium node tests/browser.cjs
 NODE_PATH=/tmp/meta-browser-check/node_modules CHROMIUM_PATH=/usr/bin/chromium node tests/chunk-browser.cjs
+NODE_PATH=/tmp/meta-browser-check/node_modules CHROMIUM_PATH=/usr/bin/chromium node tests/page-lightener-browser.cjs
+# Daha büyük karşılaştırma:
+LIGHTENER_TEST_ADS=2000 NODE_PATH=/tmp/meta-browser-check/node_modules CHROMIUM_PATH=/usr/bin/chromium node tests/page-lightener-browser.cjs
 ```
 
 `CHROMIUM_PATH` yerine kurulu Chromium yolunu kullanın veya Playwright'ın kendi Chromium'u kuruluysa değişkeni atlayın. Testler yerel örnek HTML ve Chrome API taklidi kullanır; canlı Facebook veya gerçek Chrome eklenti yüklemesini doğrulamaz. Worker testleri eşzamanlı başlangıçları, yeniden başlatmayı, mesaj kaynaklarını, sekme kaybını, kota hatasını, rakip karşılaştırmasını, arşivleri, Telegram kimlik bilgisi gizliliğini, başarılı/hatalı API yanıtlarını ve yeniden deneme kuyruğunu kapsar. Tarayıcı testi üç betiği birlikte çalıştırarak veri çıkarma, paneli yeniden açma, durdurma, geçmiş, rakip listesi, filtreler arşiv indirmeleri, Telegram formu/test/tamamlanma mesajları ve CSV/JSON içeriğini kontrol eder.
@@ -163,3 +182,5 @@ Sonuçlar Chrome'un yerel depolama kotasına tabidir. Bir yazım başarısız ol
 Parçalı mod testleri tarih sınırlarını, sabit tarih parametrelerini ve mevcut sorgunun korunmasını, ön kontrolü, tarih/medya/platform bölünmesini, tekilleştirmeyi, hız/çakışma teşhisini, iki yeniden denemeyi, sekme kimliği güvenliğini, kayıt hatasını ve normal moda geri dönüşü kapsar. Yeni Chromium testi değiştirilmemiş içerik motoruyla iki gerçek test sekmesini tarar; popup/tarayıcı yeniden başlangıcından devam ederek ham 4 / benzersiz 3 sonucunu, CSV/JSON/XLSX şemasını ve tek Telegram özetini doğrular. Meta yanıtları ve Chrome API'leri kontrollü taklitlerdir; canlı Meta oturumunda test yapılmaz.
 
 Yaşam döngüsü testleri 20 saniyelik hata beklemesini, kalıcı iki açılış sınırını, 0/okunamadı ayrımını, 10–25 saniyelik probu, PING yeniden deneme/enjeksiyonunu, pencere kullanımını, worker bağlanmasını, son 100 olayı ve rozet biçimini kapsar. Chromium testi popup kapandıktan sonra yan panel sayfasının güncellenmesini ve ayar butonunun sidePanel.open çağrısını doğrular. Yerel Chrome API taklitleri gerçek Chrome yan panelinin pencere/fokus davranışını veya canlı Meta oturumunu doğrulamaz.
+
+Hafifletme testleri okunmamış/görünür kartları, son 60 kartı, ölçülen yüksekliği, medya hatalarını, kaynak geri yüklemeyi, üç düşük hızlı kaydırmada emniyet kapatmasını ve sekmeye bağlı DNR kural temizliğini doğrular. Chromium A/B testi kapalı, açık ve deneysel engelleme açık durumlarında ID, reklamveren, tam metin/hook, başlık, CTA, tarih, medya türü/URL, hedef ve platformları birebir karşılaştırır. Ağ engelleme ve Chrome mesaj API’leri taklittir; DOM ve medya etiketleri gerçek Chromium’da çalışır. Canlı Meta oturumu veya gerçek Chrome DNR politikası bu ortamda doğrulanmaz.

@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const VERSION = '0.9.1';
+  const VERSION = '0.9.2';
   if (globalThis.__metaAdCollector?.version === VERSION) return;
   // A previous boolean guard belongs to an older, non-disposable collector.
   if (globalThis.__metaAdCollector === true) return;
@@ -73,6 +73,7 @@
     function enqueue(node) {
       const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
       if (!element || element.closest('script,style,noscript')) return;
+      current.lightener?.prepare(element);
       // React can recycle an old card element for a different ID. Restore it before reading.
       for (let old = element; old && old !== document.body; old = old.parentElement) {
         const prior = current.lightened.get(old);
@@ -230,8 +231,9 @@
       const response=await chrome.runtime.sendMessage({type:'META_SCAN_APPEND',sessionId:current.sessionId,records,batchId:`${current.sessionId}:${current.savedCount}`,scrollCount:current.scrollCount,discovery:{...discovery,reportedTotal:current.reportedTotal??null,versionEncounters:current.versionEncounters,recoveryRound:current.recoveryRound||0,speed:current.speed||null,slow:current.slow||false,scrollY:window.scrollY}});
       if(!response?.ok)throw new Error(response?.error||'Reklam paketi kaydedilemedi.');
       current.pending.splice(0,records.length);current.savedCount+=records.length;
+      await current.lightener?.committed(records);
     }
-    if(finished){const response=await chrome.runtime.sendMessage({type:'META_SCAN_FINISHED',sessionId:current.sessionId,ads:[...current.ads.values()],scrollCount:current.scrollCount,reason,discovery:{...discovery,reportedTotal:current.reportedTotal??null,versionEncounters:current.versionEncounters,speed:current.speed||null,slow:current.slow||false,scrollY:window.scrollY}});if(!response?.ok)throw new Error(response?.error||'Tarama sonlandırılamadı.');}
+    if(finished){await current.lightener?.finish();const response=await chrome.runtime.sendMessage({type:'META_SCAN_FINISHED',sessionId:current.sessionId,ads:[...current.ads.values()],scrollCount:current.scrollCount,reason,discovery:{...discovery,reportedTotal:current.reportedTotal??null,versionEncounters:current.versionEncounters,speed:current.speed||null,slow:current.slow||false,scrollY:window.scrollY}});if(!response?.ok)throw new Error(response?.error||'Tarama sonlandırılamadı.');}
   }
   function waitUntil(current,predicate,timeout){
     return new Promise(resolve=>{
@@ -263,7 +265,7 @@
         catch { queued.delete(id); discovery.extractionFailures=(discovery.extractionFailures||0)+1; continue; }
         current.ids.add(id);current.ads.set(id,ad);current.pending.push(ad);index.mark(record.element,id);
         if(/birden fazla versiyonu var|multiple versions|several versions/i.test(record.element.textContent||''))current.versionEncounters++;
-        lighten(current,record.element);index.drain().delete(id);
+        current.lightener?.track(record.element,id);if(current.useLegacy)lighten(current,record.element);index.drain().delete(id);
         if((current.ads.size-current.initialCount)%50===0){const elapsed=Math.max(.001,(performance.now()-current.speedAt)/1000);current.speed=3000/elapsed;current.baselineSpeed??=current.speed;current.slow=current.speed<current.baselineSpeed*.3;current.speedAt=performance.now();}
         if(current.pending.length>=25)await flush(current);
         await liveProgress(current);
@@ -274,10 +276,12 @@
       }
       if(current.ads.size===before&&!fullScanned&&!current.stopped){await collect(true);return;}
       if(current.ads.size>before)current.recoveryRound=0;
+      await current.lightener?.afterScroll(current.ads.size);
       await liveProgress(current);
     };
     const waitForNew=timeout=>waitUntil(current,()=>index.drain().size>0,timeout);
     try{
+      if(current.lightener){const result=await current.lightener.start();current.useLegacy=result.legacy;}
       // Process the complete current DOM before waiting for mutations or scrolling.
       await collect();
       if(!current.ads.size&&!current.stopped){
@@ -287,10 +291,10 @@
       if(!current.ads.size&&!current.stopped){
         reason=discovery.extractionFailures?'extraction-failed':discovery.found ? (discovery.unreadable===discovery.found?'id-unreadable':'incomplete-cards') : 'no-cards';
       }else reason=await ScanLoop.run(current.settings,{stopped:()=>current.stopped||!onLibrary()||location.href!==current.url,count:()=>current.ads.size,collect:async()=>{if(initialPassPending){initialPassPending=false;return;}await collect();},waitForNew,
-        scroll:async()=>{window.scrollTo(0,document.body.scrollHeight);current.scrollCount++;await liveProgress(current);},
+        scroll:async()=>{current.lightener?.beforeScroll(current.ads.size);window.scrollTo(0,document.body.scrollHeight);current.scrollCount++;await liveProgress(current);},
         recovery:async round=>{current.recoveryRound=round;await flush(current);await liveProgress(current);},
         clickMore:async()=>{[...document.querySelectorAll('button,[role="button"],a')].find(node=>visible(node)&&/^(daha fazla göster|daha çok göster|see more|load more|show more)$/i.test(normalized(node)))?.click();},
-        bounce:async()=>{window.scrollBy(0,-600);window.scrollTo(0,document.body.scrollHeight);current.scrollCount+=2;await liveProgress(current);},
+        bounce:async()=>{current.lightener?.beforeScroll(current.ads.size);window.scrollBy(0,-600);window.scrollTo(0,document.body.scrollHeight);current.scrollCount+=2;await liveProgress(current);},
         waitSpinner:timeout=>waitUntil(current,()=>![...document.querySelectorAll('[role="progressbar"],[aria-busy="true"],[aria-label*="loading" i],[aria-label*="yüklen" i],[class*="spinner" i]')].some(visible),timeout)
       });
       if(location.href!==current.url)reason='page-changed';
@@ -323,6 +327,9 @@
         throw new Error('Tarama ayarları geçersiz.');
       }
       const current = { settings, tabId, sessionId, ads: new Map(resumeAds.map(ad=>[ad.id,ad])), savedCount:resumeAds.length, ids:new Set(resumeAds.map(ad=>ad.id)),pending:[],recent:[],styles:[],lightened:new WeakMap(),lastProgress:0,speedAt:performance.now(),initialCount:resumeAds.length,nextRefresh:(Math.floor(resumeAds.length/300)+1)*300,versionElements:new WeakMap(), versionEncounters:resumeVersionEncounters, reportedTotal:resumeReportedTotal, scrollCount:resumeScrolls, startedAt: Date.now(), url: location.href, stopped: false };
+      globalThis.__lastPageLightener?.restoreAll();
+      current.lightener=globalThis.PageLightener?.create({sessionId});current.useLegacy=!current.lightener;
+      globalThis.__lastPageLightener=current.lightener;
       session = current;
       respond({ ok: true });
       if(message.scrollY)window.scrollTo(0,message.scrollY);
@@ -330,7 +337,7 @@
     })().catch((error) => respond({ ok: false, error: error.message }));
     return true;
   };
-  const onPageHide = () => { if (session) session.stopped = true; wake?.(); };
+  const onPageHide = () => { void session?.lightener?.stop();if (session) session.stopped = true; wake?.(); };
   chrome.runtime.onMessage.addListener(onMessage);
   addEventListener('pagehide', onPageHide);
   globalThis.__metaAdCollector = { version: VERSION, dispose() {

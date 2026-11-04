@@ -1,5 +1,5 @@
 'use strict';
-if(typeof importScripts==='function')importScripts('ad-data.js','competitor.js','chunk-scan.js');
+if(typeof importScripts==='function')importScripts('ad-data.js','competitor.js','chunk-scan.js','page-lightener-worker.js');
 
 const DEFAULTS = {
   chunkRun: null, chunkConfig: null,
@@ -62,6 +62,7 @@ async function publishProgress(state, override = null) {
 }
 async function finish(state, reason, results = {}) {
   if (!state.scan.running) return;
+  if(lightenerService)await lightenerService.cleanup(state.scan.tabId,state.scan.sessionId).catch(()=>{});
   let ads = results.ads ?? state.ads;
   const {pendingScan,scanProgress}=await chrome.storage.session.get(['pendingScan','scanProgress']);
   if(pendingScan?.sessionId===state.scan.sessionId)ads=[...new Map([...ads,...pendingScan.ads].map(ad=>[ad.id,ad])).values()];
@@ -125,6 +126,7 @@ function sanitizeDiscovery(value) {
 }
 async function handle(message, sender) {
   const type = message?.type;
+  if(lightenerService?.supports(type))return lightenerService.handle(message,sender);
   if(sender.tab && chunkService && await chunkService.owns(sender,message))return chunkService.content(message,sender);
   const state=['SCAN_PROGRESS','META_SCAN_APPEND'].includes(type)?{...DEFAULTS,...await chrome.storage.local.get(['scan','settings','scrollCount','scanBatches'])}:await readState();
   if(sender.tab&&competitorService&&await competitorService.owns(sender,message))return competitorService.content(message,sender);
@@ -199,10 +201,10 @@ async function handle(message, sender) {
       let collector;
       try { collector = await chrome.tabs.sendMessage(tab.id, { type: 'META_SCAN_STATUS' }, { frameId: 0 }); }
       catch {
-        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['ad-data.js','scan-loop.js','content.js'] });
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['ad-data.js','scan-loop.js','page-lightener.js','content.js'] });
         collector = await chrome.tabs.sendMessage(tab.id, { type: 'META_SCAN_STATUS' }, { frameId: 0 });
       }
-      if (collector?.version !== '0.9.1') throw new Error('Meta sekmesinde eski tarama kodu çalışıyor. Meta sekmesini yenile ve eklentinin güncel sürümünü yüklediğinden emin ol.');
+      if (collector?.version !== '0.9.2') throw new Error('Meta sekmesinde eski tarama kodu çalışıyor. Meta sekmesini yenile ve eklentinin güncel sürümünü yüklediğinden emin ol.');
       if(chunkService)await chunkService.hide();
       const scan = { running: true, stopping: false, tabId: tab.id, sessionId: crypto.randomUUID(),
         sourceUrl: tab.url, startedAt: Date.now(), updatedAt: Date.now(), reason: 'running' };
@@ -224,7 +226,7 @@ async function handle(message, sender) {
         let response;
         try { response = await chrome.tabs.sendMessage(tab.id, startMessage, { frameId: 0 }); }
         catch {
-          await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['ad-data.js','scan-loop.js','content.js'] });
+          await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['ad-data.js','scan-loop.js','page-lightener.js','content.js'] });
           response = await chrome.tabs.sendMessage(tab.id, startMessage, { frameId: 0 });
         }
         if (!response?.ok) throw new Error(response?.error || 'Tarama başlatılamadı.');
@@ -314,7 +316,7 @@ async function handle(message, sender) {
 }
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id || (message?.type === 'SCAN_PROGRESS' && !sender.tab)) return;
-  enqueue(() => handle(message, sender)).then(respond, (error) => respond({ ok: false, error: error.message }));
+  enqueue(async () => {const response=await handle(message,sender);if(lightenerService)await lightenerService.after(message,sender,response).catch(()=>{});return response;}).then(respond, (error) => respond({ ok: false, error: error.message }));
   return true;
 });
 function tabGone(tabId,loading=false) {
@@ -436,12 +438,13 @@ chrome.runtime.onInstalled.addListener(scheduleDelivery);
 
 const competitorService=globalThis.CompetitorWatch?CompetitorWatch.create(chrome,{enqueue,sendTelegram}):null;
 const chunkService=globalThis.ChunkScan?ChunkScan.create(chrome,{enqueue,sendTelegram,publishProgress}):null;
+const lightenerService=globalThis.PageLightenerWorker?PageLightenerWorker.create(chrome,{enqueue}):null;
 
 async function resumeRefresh(tabId){
  const state=await readState();if(!state.scan.running||!state.scan.refreshing||state.scan.tabId!==tabId)return;
  const scan={...state.scan,sessionId:crypto.randomUUID(),refreshing:false};
  await chrome.storage.local.set({scan,ads:state.ads,scanBatches:null});if(state.scanBatches?.keys?.length)await chrome.storage.local.remove(state.scanBatches.keys);
- try{await chrome.scripting.executeScript({target:{tabId},files:['ad-data.js','scan-loop.js','content.js']});
+ try{await chrome.scripting.executeScript({target:{tabId},files:['ad-data.js','scan-loop.js','page-lightener.js','content.js']});
  const response=await chrome.tabs.sendMessage(tabId,{type:'META_SCAN_START',tabId,sessionId:scan.sessionId,settings:state.settings,resumeAds:state.ads,resumeScrolls:state.scrollCount,resumeReportedTotal:state.scan.discovery?.reportedTotal,scrollY:state.scan.scrollY},{frameId:0});
  if(!response?.ok)throw new Error('Yenileme sonrası tarama başlatılamadı.');await chrome.alarms.clear('scan-refresh-timeout');
  }catch{await finish({...state,scan},'error');}

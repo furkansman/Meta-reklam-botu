@@ -1,12 +1,14 @@
 <!doctype html>
 <html lang="tr">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Meta Reklam Botu · Canlı tarama</title><link rel="stylesheet" href="sidepanel.css"><script src="sidepanel.js" defer></script></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Meta Reklam Botu · Canlı tarama</title><link rel="stylesheet" href="sidepanel.css"><script src="page-lightener-ui.js" defer></script><script src="sidepanel.js" defer></script></head>
 <body>
 <header><h1>Meta Reklam Botu</h1><p>Canlı tarama ve olay günlüğü</p></header>
 <main>
   <section class="card live-status-bar" aria-label="Canlı durum">
     <p id="panel-status" role="status">Yükleniyor…</p>
     <div class="counters"><div><strong id="panel-ads">0</strong><span>REKLAM</span></div><div><strong id="panel-scrolls">0</strong><span>SCROLL</span></div></div>
+    <p id="page-lightener-diagnostics" class="hint"></p>
+    <details><summary>Hafifletme günlüğü</summary><ul id="page-lightener-log" class="hint"></ul></details>
     <p id="panel-progress" aria-live="polite"></p>
     <p id="panel-refresh" class="hint">Her saniye güncellenir. Ayarlar popup'ta kalır.</p>
   </section>

@@ -15,7 +15,7 @@ function harness(shared = {}) {
   let apiStatus = 200, apiDescription='',writeError=false;
   const event = (name) => ({ addListener(fn) { events[name] = fn; } });
   let activeTab = { id: 7, url };
-  let failStart = false, failQuota = false, collectorVersion = '0.9.1';
+  let failStart = false, failQuota = false, collectorVersion = '0.9.2';
   const chrome = {
     runtime: { id: 'test', async sendMessage() {}, getURL: (path) => `chrome-extension://test/${path}`, onMessage: event('message'),
       onStartup: event('startup'), onInstalled: event('installed') },
@@ -161,9 +161,9 @@ test('stale collector is rejected before clearing results; discovery is sanitize
   const response = await h.send({ type: 'START_SCAN', settings });
   assert.equal(response.ok, false); assert.match(response.error, /eski tarama kodu/);
   assert.equal(h.store.ads[0].id, 'previous');
-  h.collectorVersion('0.9.1');
+  h.collectorVersion('0.9.2');
   await h.send({ type: 'START_SCAN', settings });
-  await h.progress({ discovery: { candidates: 12, matched: 1, version: '0.9.1', token: 'private' } });
+  await h.progress({ discovery: { candidates: 12, matched: 1, version: '0.9.2', token: 'private' } });
   assert.equal(h.store.scan.discovery.candidates, 12);
   assert.equal(h.store.scan.discovery.token, undefined);
 });
@@ -220,7 +220,7 @@ test('placeholder and blank reuse saved token; unsaved token test does not repla
 test('append-only batches are idempotent and materialize without rewriting old records',async()=>{
  const h=harness();await h.send({type:'START_SCAN',settings:{...settings,maxAds:100}});
  const sessionId=h.store.scan.sessionId;
- const batch={type:'META_SCAN_APPEND',batchId:sessionId+':0',records:[{id:'123456789012',fullText:'First'}],scrollCount:1,discovery:{candidates:1,matched:1,version:'0.9.1',speed:100,slow:false}};
+ const batch={type:'META_SCAN_APPEND',batchId:sessionId+':0',records:[{id:'123456789012',fullText:'First'}],scrollCount:1,discovery:{candidates:1,matched:1,version:'0.9.2',speed:100,slow:false}};
  assert.equal((await h.progress(batch)).ok,true);assert.equal(h.store.ads.length,0);
  await h.progress(batch);assert.equal(h.store.scanBatches.keys.length,1);
  const state=await h.send({type:'GET_STATE'});assert.equal(state.state.ads.length,1);assert.equal(state.state.ads[0].fullText,'First');
