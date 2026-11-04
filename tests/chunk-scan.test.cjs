@@ -6,9 +6,9 @@ const api = require('../chunk-scan.js'), AdData = require('../ad-data.js');
 const source = 'https://www.facebook.com/ads/library/?q=implant&country=TR&active_status=active&media_type=all&start_date[min]=2026-10-01&start_date[max]=2026-10-31';
 const config = { start: '2026-10-01', end: '2026-10-02', unit: 'day', limit: 800, waitMin: 20, waitMax: 40 };
 function harness(shared = {}, worker = false) {
-  const store = shared.store || {}, sessionStore = shared.sessionStore || {}, events = {}, alarms = new Map(), tabs = shared.tabs || new Map();
-  const writes = [], requests = [], probes = [], telegram = [], progress = [], removed = [];
-  let time = Date.parse('2026-11-04T12:00:00Z'), index = 20, queue = Promise.resolve(), runtimeListener, statusRunning = true, poolFailures = 0, rankOrder = [];
+  const store = shared.store || {}, sessionStore = shared.sessionStore || {}, events = {}, alarms = new Map(), tabs = shared.tabs || new Map(), windows=shared.windows||new Map();
+  const writes = [], requests = [], probes = [], telegram = [], progress = [], removed = [], sleeps=[];
+  let time = Date.parse('2026-11-04T12:00:00Z'), index = 20, queue = Promise.resolve(), runtimeListener, statusRunning = true, poolFailures = 0, rankOrder = [], pingReady=true,injectionReady=false;
   const event = name => ({ addListener(fn) { (events[name] ||= []).push(fn); if (name === 'message') runtimeListener = fn; } });
   const chrome = {
     runtime: { id: 'test', getURL: p => 'chrome-extension://test/' + p, async sendMessage() {}, onMessage: event('message'), onStartup: event('startup'), onInstalled: event('installed') },
@@ -16,9 +16,11 @@ function harness(shared = {}, worker = false) {
       local: { async setAccessLevel() {}, async get(keys) { if (typeof keys === 'string') keys = [keys]; return structuredClone(Object.fromEntries(keys.filter(k => k in store).map(k => [k, store[k]]))); }, async set(value) { if(poolFailures && Object.keys(value).some(k=>k.startsWith('chunk-pool:'))){poolFailures--;throw new Error('quota');} writes.push(structuredClone(value)); Object.assign(store, structuredClone(value)); }, async remove(keys) { for (const k of keys) delete store[k]; } },
       session: { async setAccessLevel() {}, async get(keys) { if (typeof keys === 'string') keys = [keys]; return structuredClone(Object.fromEntries(keys.filter(k => k in sessionStore).map(k => [k, sessionStore[k]]))); }, async set(value) { Object.assign(sessionStore, structuredClone(value)); } }
     },
-    tabs: { async query() { return [{ id: 7, url: shared.url || source }]; }, async create(value) { const tab = { ...value, id: index++, status: 'loading' }; tabs.set(tab.id, tab); return tab; }, async get(id) { if (!tabs.has(id)) throw Error('missing'); return tabs.get(id); }, async remove(id) { removed.push(id); tabs.delete(id); }, async sendMessage(id, message) { requests.push({ id, ...message }); if (message.type === 'META_SCAN_STATUS') return { running: statusRunning, sessionId: store.chunkRun?.active?.sessionId || store.scan?.sessionId, version: '0.9.1' }; return { ok: true }; }, onUpdated: event('updated'), onRemoved: event('removed') },
+    tabs: { async query(query) { return query?.windowId!=null?[...tabs.values()].filter(tab=>tab.windowId===query.windowId):[{ id: 7, url: shared.url || source }]; }, async create(value) { const tab = { ...value, id: index++, status: 'loading' }; tabs.set(tab.id, tab); return tab; }, async get(id) { if (!tabs.has(id)) throw Error('missing'); return tabs.get(id); }, async remove(id) { removed.push(id); tabs.delete(id); }, async sendMessage(id, message) { requests.push({ id, ...message }); if(message.type==='PING')return {ok:true,ready:pingReady};if (message.type === 'META_SCAN_STATUS') return { running: statusRunning, sessionId: store.chunkRun?.active?.sessionId || store.scan?.sessionId, version: '0.9.1' }; return { ok: true }; }, onUpdated: event('updated'), onRemoved: event('removed') },
+    windows:{async create(value){const window={id:100+windows.size,...value,tabs:[{id:100000+windows.size,url:value.url}]};windows.set(window.id,window);return window;},async get(id){if(!windows.has(id))throw new Error('closed window');return windows.get(id);},async getAll(){return [...windows.values()];},async update(id,value){Object.assign(windows.get(id),value);return windows.get(id);},onRemoved:event('windowRemoved')},
+    action:{async setBadgeText(value){store.badge=value.text;},async setBadgeBackgroundColor(value){store.badgeColor=value.color;}},
     alarms: { async create(name, value) { alarms.set(name, value); }, async clear(name) { alarms.delete(name); }, onAlarm: event('alarm') },
-    scripting: { async executeScript(input) { requests.push(input); if (input.files) return []; if(input.func?.name==='rankPage')return [{result:rankOrder}]; const active = store.chunkRun.active; return [{ result: { blocked: false, total: 2, url: tabs.get(active.tabId).url, ...probes.shift() } }]; } },
+    scripting: { async executeScript(input) { requests.push(input); if(input.files){if(injectionReady&&input.files.includes('chunk-bridge.js'))pingReady=true;return [];} if(input.func?.name==='rankPage')return [{result:rankOrder}]; const active = store.chunkRun.active; return [{ result: { blocked: false, total: 2, url: tabs.get(active.tabId).url, ...probes.shift() } }]; } },
     notifications: { onButtonClicked: event('button') }
   };
   const enqueue = task => { const result = queue.then(task); queue = result.catch(() => {}); return result; };
@@ -27,13 +29,13 @@ function harness(shared = {}, worker = false) {
     context = { chrome, ChunkScan: api, AdData, crypto: webcrypto, Date, URL, console, AbortSignal, setTimeout, clearTimeout, fetch: async (url, options) => { telegram.push(JSON.parse(options.body)); return { ok: true, async json() { return { ok: true }; } }; } };
     vm.runInNewContext(fs.readFileSync(require('node:path').join(__dirname, '../background.js'), 'utf8'), context);
     service = vm.runInNewContext('chunkService', context);
-  } else service = api.create(chrome, { enqueue, now: () => time, random: () => .5, publishProgress: async (state, override) => { const value = { ...override, status: override.status || 'scanning' }; progress.push(value); return value; }, sendTelegram: async (config, text) => telegram.push(text) });
+  } else service = api.create(chrome, { enqueue, autoRecover:false,sleep:async ms=>{sleeps.push(ms);},now: () => time, random: () => .5, publishProgress: async (state, override) => { const value = { ...override, status: override.status || 'scanning' }; progress.push(value); return value; }, sendTelegram: async (config, text) => telegram.push(text) });
   const send = async message => { const active = store.chunkRun.active; return service.content({ sessionId: active.sessionId, scrollCount: 0, ...message }, { id: 'test', tab: { id: active.tabId }, frameId: 0, url: tabs.get(active.tabId).url }); };
-  return { service, store, sessionStore, tabs, alarms, writes, requests, probes, telegram, progress, removed, events, context, chrome,
+  return { service, store, sessionStore, tabs, windows, sleeps, alarms, writes, requests, probes, telegram, progress, removed, events, context, chrome,
     send, command: message => new Promise(resolve => runtimeListener(message, { id: 'test', url: 'chrome-extension://test/popup.html' }, resolve)),
-    async loaded(total = 2) { probes.push({ total }); await service.loaded(store.chunkRun.active.tabId); },
-    async next() { time = Math.max(time, store.chunkRun.nextAt); await service.next(); },
-    advance(ms) { time += ms; }, async idle() { await queue; }, setStatus(value) { statusRunning = value; }, failPoolOnce(){poolFailures=1;}, setOrder(ids){rankOrder=ids;}
+    async loaded(total = 2) { tabs.get(store.chunkRun.active.tabId).status='complete';probes.push({ total }); await service.loaded(store.chunkRun.active.tabId); },
+    async next() { if(store.chunkRun.active?.phase==='failure-hold'){time=Math.max(time,store.chunkRun.active.closeAt);await service.closeFailed();}time = Math.max(time, store.chunkRun.nextAt); await service.next(); },
+    advance(ms) { time += ms; }, async idle() { await queue; }, setStatus(value) { statusRunning = value; }, failPoolOnce(){poolFailures=1;}, setOrder(ids){rankOrder=ids;},setPing(value){pingReady=value;},setInjectionReady(value){injectionReady=value;}
   };
 }
 const ad = (id, startDate = '2026-10-01') => ({ id: String(id), advertiser: 'Marka', fullText: 'Diş tedavisinde yeni çözüm.', hook: 'Diş tedavisinde yeni çözüm.', headline: 'Teklif', cta: 'Get Quote', startDate, mediaType: 'image', mediaUrl: 'https://example.org/ad.jpg', targetUrl: 'https://example.org/' });
@@ -102,15 +104,25 @@ test('unknown estimate scans normally, limit retains results and then splits', a
   assert.equal(h.requests.filter(r => r.type === 'META_SCAN_START').length, 1); await h.send({ type: 'META_SCAN_FINISHED', ads: [ad('123456789012'), ad('123456789013')], reason: 'limit' });
   assert.equal(h.store.chunkRun.uniqueCount, 2); assert.equal(h.store.chunkRun.queue.length, 2); assert.equal(h.store.chunkRun.splits.length, 1);
 });
-test('exactly two retries with exponential waits; failed part listed and next part continues', async () => {
-  const h = harness(); await h.service.start(config);
-  for (let attempt = 0; attempt < 3; attempt++) {
-    await h.loaded(5); await h.send({ type: 'META_SCAN_FINISHED', ads: [ad('123456789012')], reason: 'meta-exhausted' });
-    if (attempt < 2) { assert.equal(h.store.chunkRun.queue[0].attempt, attempt + 1); assert.equal(h.store.chunkRun.nextAt - Date.parse('2026-11-04T12:00:00Z'), attempt === 0 ? 60000 : 180000); }
-    await h.next();
-  }
-  assert.equal(h.store.chunkRun.done[0].status, 'failed'); assert.equal(h.store.chunkRun.active.piece.start, '2026-10-02'); assert.equal(h.store.chunkRun.rawCount, 1); assert.equal(h.store.chunkRun.uniqueCount, 1);
-  await h.loaded(0); assert.equal(h.store.chunkRun.phase, 'done'); assert(api.summary(h.store.chunkRun).includes('Başarısız parça: 1'));
+test('same piece opens at most twice; failures remain visible 20 seconds, log cause and advance',async()=>{
+ const h=harness();await h.service.start(config);
+ for(let attempt=0;attempt<2;attempt++){
+  await h.loaded(5);const tabId=h.store.chunkRun.active.tabId;
+  await h.send({type:'META_SCAN_FINISHED',ads:[ad('123456789012')],reason:'error'});
+  assert.equal(h.store.chunkRun.active.phase,'failure-hold');assert(h.tabs.has(tabId));assert.equal(h.store.badge,'!');
+  if(attempt===0){await h.service.pause();await h.service.resume();assert.equal(h.store.chunkRun.openCounts[api.key(h.store.chunkRun.active.piece)],1);assert(h.tabs.has(tabId));}
+  h.advance(19999);await h.service.closeFailed();assert(h.tabs.has(tabId));
+  h.advance(1);await h.service.closeFailed();assert(!h.tabs.has(tabId));
+  await h.next();
+ }
+ assert.equal(h.store.chunkRun.done[0].status,'failed');assert.equal(h.store.chunkRun.active.piece.start,'2026-10-02');
+ assert.equal(h.store.chunkRun.openCounts[api.key({start:'2026-10-01',end:'2026-10-01'})],2);
+ assert(h.store.chunkEvents.some(event=>event.type==='Yeniden deneme 1/2'));assert(h.store.chunkEvents.some(event=>event.reason.includes('Motor error')));
+ await h.loaded(0);assert.equal(h.store.chunkRun.phase,'done');assert.equal(h.store.chunkRun.uniqueCount,1);
+});
+test('approximate Meta count is not a completion target and does not cause repeated reopening',async()=>{
+ const h=harness();await h.service.start(config);await h.loaded(500);await h.send({type:'META_SCAN_FINISHED',ads:[ad('123456789012')],reason:'meta-exhausted'});
+ assert.equal(h.store.chunkRun.done[0].status,'done');assert.equal(h.store.chunkRun.queue.length,1);assert(h.store.chunkEvents.some(event=>event.type==='Parça bitti'&&event.reason.includes('Meta: 500')));
 });
 test('pause checkpoints unfinished piece, resume does not repeat completed pieces or add duplicate IDs', async () => {
   const h = harness(); await h.service.start(config); await h.loaded(1); await h.send({ type: 'META_SCAN_FINISHED', ads: [ad('123456789012')], reason: 'meta-exhausted' }); await h.next(); await h.loaded(1);
@@ -122,10 +134,10 @@ test('pause checkpoints unfinished piece, resume does not repeat completed piece
   const restored = harness(h); await restored.service.resume(); await restored.loaded(1); await restored.send({ type: 'META_SCAN_FINISHED', ads: [ad('123456789013')], reason: 'meta-exhausted' });
   assert.equal(h.store.chunkRun.phase, 'done'); assert.equal(h.store.chunkRun.done.length, 2); assert.equal(h.store.chunkRun.uniqueCount, 2); assert.equal(h.store.chunkRun.rawCount, 2);
 });
-test('browser restart pauses durably and never closes a reused unrelated tab ID', async () => {
-  const h = harness(); await h.service.start(config); const id = h.store.chunkRun.active.tabId; h.tabs.set(id, { id, url: 'https://example.org/' });
-  await h.service.recover(true); assert.equal(h.store.chunkRun.running, false); assert.equal(h.store.chunkRun.queue.length, 2); assert.equal(h.removed.length, 0);
-  await h.service.resume(); assert.equal(h.store.chunkRun.active.piece.start, config.start);
+test('worker restoration keeps a live scan in its window; a closed window pauses with explicit reason',async()=>{
+ const h=harness();await h.service.start(config);await h.loaded(2);const windowId=h.store.chunkRun.windowId,tabId=h.store.chunkRun.active.tabId;
+ await h.service.recover();assert(h.store.chunkRun.running);assert.equal(h.store.chunkRun.active.tabId,tabId);assert.equal(h.windows.size,1);
+ h.windows.delete(windowId);await h.service.recover();assert.equal(h.store.chunkRun.running,false);assert.equal(h.store.chunkRun.stopReason,'durduruldu: pencere kapatıldı');assert.equal(h.store.chunkRun.queue.length,2);
 });
 test('wrong frame, sender URL and session cannot write pool records', async () => {
   const h = harness(); await h.service.start(config); await h.loaded(); const active = h.store.chunkRun.active;
@@ -146,7 +158,7 @@ test('worker integration: GET_STATE exposes pooled data, normal mode unaltered, 
 });
 test('unsplittable one-day platform leaves are failed, do not loop or silently claim full coverage', async () => {
   const h = harness(); await h.service.start({ ...config, end: config.start, limit: 1 });
-  for (let i = 0; h.store.chunkRun.running && i < 10; i++) { await h.loaded(100); if (h.store.chunkRun.running) await h.next(); }
+  for (let i = 0; h.store.chunkRun.running && i < 20; i++) { await h.loaded(100); if (h.store.chunkRun.running) await h.next(); }
   assert.equal(h.store.chunkRun.phase, 'done'); assert.equal(h.store.chunkRun.done.length, 4); assert(h.store.chunkRun.done.every(item => item.status === 'failed'));
   assert.equal(h.store.chunkRun.splits.length, 3); assert.equal(h.requests.filter(r => r.type === 'META_SCAN_START').length, 0);
 });
@@ -176,9 +188,9 @@ test('pool writes are append-only 25-record batches and a failed batch preserves
   assert(h.writes.filter(w => Object.keys(w).some(k => k.startsWith('chunk-pool:'))).every(w => !('ads' in w)));
   await h.service.resume(); assert.equal(h.store.chunkRun.active.piece.start, config.start);
 });
-test('loading timeout retries twice then records failure and advances', async () => {
+test('loading timeout reaches the two-opening limit then records failure and advances', async () => {
   const h = harness(); await h.service.start(config);
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 2; i++) {
     h.advance(45001); for (const handler of h.events.alarm) handler({ name: 'chunk-timeout' }); await h.idle(); await h.next();
   }
   assert.equal(h.store.chunkRun.done[0].status, 'failed'); assert.equal(h.store.chunkRun.active.piece.start, '2026-10-02'); assert.equal(h.requests.filter(r => r.type === 'META_SCAN_START').length, 0);
@@ -191,4 +203,54 @@ test('with the manager loaded, default START_SCAN retains normal ownership, hist
   const sessionId = h.store.scan.sessionId;
   const finished = await new Promise(resolve => h.events.message.at(-1)({ type: 'META_SCAN_FINISHED', sessionId, scrollCount: 0, ads: [ad('123456789012')], reason: 'visible-complete' }, { id: 'test', tab: { id: 7 }, frameId: 0, url: source }, resolve));
   assert(finished.ok); assert.equal(h.store.history.length, 1); assert.equal(h.store.ads.length, 1); assert.deepEqual(Object.keys(AdData.rows(h.store.ads)[0]), AdData.COLUMNS);
+});
+test('PING retries five times at one-second intervals, injects the untouched engine and bridge, then confirms readiness',async()=>{
+ const h=harness();await h.service.start(config);h.setPing(false);h.setInjectionReady(true);await h.loaded(null);
+ assert.deepEqual(h.sleeps,[1000,1000,1000,1000]);assert.equal(h.requests.filter(r=>r.type==='PING').length,6);
+ assert(h.requests.some(r=>r.files?.includes('chunk-bridge.js')&&r.files.includes('content.js')));
+ assert.equal(h.store.chunkRun.active.phase,'scanning');assert(h.store.chunkEvents.some(event=>event.type==='Content script enjekte ediliyor'));
+});
+test('missing content readiness has an explicit log and holds the failed tab without starting scanning',async()=>{
+ const h=harness();await h.service.start(config);h.setPing(false);await h.loaded(null);
+ assert.equal(h.store.chunkRun.active.phase,'failure-hold');assert.equal(h.requests.filter(r=>r.type==='META_SCAN_START').length,0);
+ assert(h.store.chunkEvents.some(event=>event.type==='Parça başarısız'&&event.reason.includes('PING')));assert(h.tabs.has(h.store.chunkRun.active.tabId));
+});
+test('journal caps at 100 newest events with time and piece label; badge formats thousands',async()=>{
+ const h=harness();await h.service.start(config);const run=h.store.chunkRun;
+ for(let i=0;i<105;i++)await h.service.log(run,'Test olayı',String(i));
+ assert.equal(h.store.chunkEvents.length,100);assert.equal(h.store.chunkEvents[0].reason,'104');assert.equal(h.store.chunkEvents.at(-1).reason,'5');assert(h.store.chunkEvents.every(event=>event.at&&event.piece==='2026-10-01'));
+ run.uniqueCount=2140;await h.service.progress(run);assert.equal(h.store.badge,'2.1k');
+});
+test('one normal scan window is reused for every piece, and the 30-second heartbeat survives worker reattachment',async()=>{
+ const h=harness();await h.service.start(config);const windowId=h.store.chunkRun.windowId;
+ assert.equal(h.windows.get(windowId).type,'normal');assert.equal(h.windows.get(windowId).focused,true);assert.equal(h.alarms.get('chunk-heartbeat').periodInMinutes,.5);
+ await h.loaded(1);await h.send({type:'META_SCAN_FINISHED',ads:[ad('123456789012')],reason:'meta-exhausted'});await h.next();
+ assert.equal(h.windows.size,1);assert.equal(h.store.chunkRun.windowId,windowId);assert.equal(h.tabs.get(h.store.chunkRun.active.tabId).windowId,windowId);
+ await h.loaded(1);await h.service.recover();assert.equal(h.store.chunkRun.active.phase,'scanning');assert.equal(h.store.chunkRun.openCounts[api.key(h.store.chunkRun.active.piece)],1);
+});
+test('explicit duplicate queued piece cannot bypass the persistent two-opening ceiling',async()=>{
+ const h=harness();await h.service.start(config);const piece=h.store.chunkRun.active.piece;await h.loaded(1);await h.send({type:'META_SCAN_FINISHED',ads:[ad('123456789012')],reason:'meta-exhausted'});
+ const run=h.store.chunkRun;run.done=[];run.openCounts[api.key(piece)]=2;run.queue=[piece];run.nextAt=0;
+ const count=h.requests.filter(r=>r.type==='META_SCAN_START').length;await h.service.next();assert.equal(h.store.chunkRun.active,null);assert.equal(h.store.chunkRun.done[0].status,'failed');assert.equal(h.requests.filter(r=>r.type==='META_SCAN_START').length,count);
+});
+function probeHarness(){
+ let time=0,callback,load,finished=false,result;const timers=new Map();let timerId=0;
+ const document={readyState:'complete',body:{innerText:'Yükleniyor…'},documentElement:{}};
+ const context={document,location:{href:source},Date:{now:()=>time},MutationObserver:class{constructor(fn){callback=fn}observe(){}disconnect(){}},setTimeout(fn,ms){const id=++timerId;timers.set(id,{fn,due:time+ms});return id},clearTimeout(id){timers.delete(id)},addEventListener(type,fn){load=fn},removeEventListener(){}};
+ const promise=vm.runInNewContext('('+api.probePage.toString()+')()',context).then(value=>{finished=true;result=value;});
+ return {document,promise,get finished(){return finished},get result(){return result},async mutate(){callback();await Promise.resolve();},async tick(ms){time+=ms;for(const [id,timer]of [...timers])if(timer.due<=time){timers.delete(id);timer.fn();}await Promise.resolve();},async loaded(){document.readyState='complete';load();await Promise.resolve();}};
+}
+test('result probe waits at least ten seconds for unknown, returns null rather than zero, and stops by 25 seconds',async()=>{
+ const h=probeHarness();await h.tick(9999);assert(!h.finished);await h.tick(1);await h.promise;assert.equal(h.result.total,null);assert.equal(h.result.loaded,true);
+ const late=probeHarness();late.document.readyState='loading';await late.tick(10000);assert(!late.finished);await late.tick(15000);await late.promise;assert.equal(late.result.loaded,false);assert.equal(late.result.total,null);
+});
+test('result text is read only after full load; explicit zero and approximate positive totals are distinct',async()=>{
+ const h=probeHarness();h.document.readyState='loading';h.document.body.innerText='0 sonuç';await h.mutate();assert(!h.finished);await h.loaded();await h.promise;assert.equal(h.result.total,0);
+ const positive=probeHarness();positive.document.body.innerText='~1.100 sonuç\nLibrary ID: 123456789012\n0 sonuç';await positive.mutate();await positive.promise;assert.equal(positive.result.total,1100);
+ const empty=probeHarness();empty.document.body.innerText='Sonuç bulunamadı';await empty.mutate();await empty.promise;assert.equal(empty.result.total,0);
+});
+test('separate PING bridge reports collector readiness, authenticates the sender and installs only once',()=>{
+ const listeners=[],context={chrome:{runtime:{id:'test',onMessage:{addListener(fn){listeners.push(fn)}}}}};
+ const source=fs.readFileSync(require('node:path').join(__dirname,'../chunk-bridge.js'),'utf8');vm.runInNewContext(source,context);vm.runInNewContext(source,context);assert.equal(listeners.length,1);
+ let reply;listeners[0]({type:'PING'},{id:'test'},value=>reply=value);assert.equal(reply.ready,false);context.__metaAdCollector={version:'0.9.1'};listeners[0]({type:'PING'},{id:'test'},value=>reply=value);assert.equal(reply.ready,true);reply=null;listeners[0]({type:'PING'},{id:'other'},value=>reply=value);assert.equal(reply,null);
 });

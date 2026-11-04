@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Meta Reklam Botu",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "description": "Meta reklam araştırmaları için tarama, geçmiş ve rakip takip paneli.",
   "permissions": [
     "activeTab",
     "storage",
     "scripting",
     "alarms",
-    "notifications"
+    "notifications",
+    "sidePanel"
   ],
   "action": {
     "default_title": "Meta Reklam Botu",
@@ -22,7 +23,8 @@
       "js": [
         "ad-data.js",
         "scan-loop.js",
-        "content.js"
+        "content.js",
+        "chunk-bridge.js"
       ],
       "run_at": "document_idle"
     }
@@ -34,5 +36,8 @@
   "host_permissions": [
     "https://www.facebook.com/*",
     "https://api.telegram.org/*"
-  ]
+  ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  }
 }

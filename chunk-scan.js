@@ -1,6 +1,7 @@
 (function (root) {
   'use strict';
-  const DAY = 86400000, NEXT = 'chunk-next', TIMEOUT = 'chunk-timeout', REPORT = 'chunk-report';
+  const DAY = 86400000, NEXT = 'chunk-next', TIMEOUT = 'chunk-timeout', REPORT = 'chunk-report', CLOSE = 'chunk-close-failed', HEARTBEAT = 'chunk-heartbeat';
+  const MAX_OPENS=2;
   const LIBRARY_HELP = 'Önce Meta Reklam Kütüphanesi sonuç sayfasını aç, sonra başlat.';
   const OVERLAP = 'Meta filtresi pencerede yayında olan reklamları getiriyor, parçalar çakışabilir';
   const SLOW = 'Hız düştü, sekme öne alınmalı ya da dinlenmeli';
@@ -66,25 +67,27 @@
     return url.href;
   }
   function parseResults(text) {
-    if (/\bno (?:ads|results) found\b|reklam bulunamadı|sonuç bulunamadı/i.test(text)) return 0;
-    const match = text.match(/(?:[~≈]\s*)?(\d+(?:[.,\u00a0 ]\d{3})*)\s*(?:sonuç|results)(?![\p{L}])/iu);
-    return match ? Number(match[1].replace(/\D/g, '')) : null;
+    const header=String(text||'').split(/Kütüphane\s+Kodu|Library\s+ID/i)[0];
+    const match=header.match(/(?:[~≈]\s*)?(\d+(?:[.,\u00a0 ]\d{3})*)\s*(?:sonuç|results)(?![\p{L}])/iu);
+    if(match)return Number(match[1].replace(/\D/g,''));
+    return /\bno (?:ads|results) found\b|reklam bulunamadı|sonuç bulunamadı/i.test(header)?0:null;
   }
-  // Self-contained for chrome.scripting.executeScript; does not modify the scan engine.
+  // Wait for a loaded page and an explicit result count. Unknown is never zero.
   function probePage() {
-    return new Promise(resolve => {
-      let observer, timer;
-      const finish = result => { observer?.disconnect(); clearTimeout(timer); resolve(result); };
-      const check = final => {
-        const text = document.body?.innerText || '';
-        const blocked = /temporarily blocked|too many requests|try again later|geçici olarak engell|çok fazla istek|rate limit|hız sınırı|istek sınırı|daha sonra tekrar dene|log in to continue|devam etmek için giriş/i.test(text);
-        const match = text.match(/(?:[~≈]\s*)?(\d+(?:[.,\u00a0 ]\d{3})*)\s*(?:sonuç|results)(?![\p{L}])/iu);
-        const total = match ? Number(match[1].replace(/\D/g, '')) : /\bno (?:ads|results) found\b|reklam bulunamadı|sonuç bulunamadı/i.test(text) ? 0 : null;
-        if (blocked || total !== null || final) finish({ blocked, total, url: location.href });
+    return new Promise(resolve=>{
+      let observer,minTimer,maxTimer,done=false;const started=Date.now();
+      const finish=result=>{if(done)return;done=true;observer?.disconnect();clearTimeout(minTimer);clearTimeout(maxTimer);removeEventListener('load',check);resolve(result);};
+      const check=()=>{
+        const loaded=document.readyState==='complete',elapsed=Date.now()-started;
+        if(!loaded&&elapsed<25000)return;
+        const text=(document.body?.innerText||'').split(/Kütüphane\s+Kodu|Library\s+ID/i)[0];
+        const blocked=/temporarily blocked|too many requests|try again later|geçici olarak engell|çok fazla istek|rate limit|hız sınırı|istek sınırı|daha sonra tekrar dene|log in to continue|devam etmek için giriş/i.test(text);
+        const match=text.match(/(?:[~≈]\s*)?(\d+(?:[.,\u00a0 ]\d{3})*)\s*(?:sonuç|results)(?![\p{L}])/iu);
+        const total=match?Number(match[1].replace(/\D/g,'')):/\bno (?:ads|results) found\b|reklam bulunamadı|sonuç bulunamadı/i.test(text)?0:null;
+        if(blocked||total!==null||elapsed>=10000)finish({loaded,blocked,total,url:location.href});
       };
-      observer = new MutationObserver(() => check(false));
-      observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
-      timer = setTimeout(() => check(true), 8000); check(false);
+      observer=new MutationObserver(check);observer.observe(document.documentElement,{childList:true,subtree:true,characterData:true});
+      addEventListener('load',check);minTimer=setTimeout(check,10000);maxTimer=setTimeout(check,25000);check();
     });
   }
   function rankPage() {
@@ -116,21 +119,79 @@
   }
   function create(chrome, hooks) {
     const enqueue = hooks.enqueue, now = hooks.now || Date.now, random = hooks.random || Math.random;
-    let cacheId = null, pool = new Map(), cachedKeys = new Set(), locations = new Map(), timer = null;
-    const read = async () => {const run=(await chrome.storage.local.get('chunkRun')).chunkRun;if(run)delete run.params;return run;};
+    let cacheId = null, pool = new Map(), cachedKeys = new Set(), locations = new Map(), timer = null, closeTimer=null;
+    const read = async () => {
+      const run=(await chrome.storage.local.get('chunkRun')).chunkRun;
+      if(run){delete run.params;if(!run.openCounts){run.openCounts={};if(run.active)run.openCounts[key(run.active.piece)]=(run.active.piece.attempt||0)+1;for(const piece of run.queue)if(piece.attempt)run.openCounts[key(piece)]=Math.max(run.openCounts[key(piece)]||0,piece.attempt);}}
+      return run;
+    };
     const save = run => chrome.storage.local.set({ chunkRun: run });
-    const close = async (tabId, expected = null) => {
+    const sleep=hooks.sleep|| (ms=>new Promise(resolve=>setTimeout(resolve,ms)));
+    async function log(run,type,reason='',piece=run?.active?.piece||run?.lastPiece||run?.queue?.[0]){
+      const {chunkEvents=[]}=await chrome.storage.local.get('chunkEvents');
+      const entry={id:crypto.randomUUID(),at:now(),runId:run?.id||null,piece:piece?label(piece):'Genel',type,reason};
+      if(run)run.statusText=reason?`${type}: ${reason}`:type;
+      await chrome.storage.local.set({chunkEvents:[entry,...chunkEvents].slice(0,100),...(run?{chunkRun:run}:{})});
+    }
+    async function badge(run){
+      if(!chrome.action)return;
+      const failed=run.active?.phase==='failure-hold'||run.phase==='failure-hold'||run.stopReason==='durduruldu: pencere kapatıldı'||run.done.some(item=>item.status==='failed');
+      const text=failed?'!':run.uniqueCount>=1000?(run.uniqueCount/1000).toFixed(1).replace(/\.0$/,'')+'k':String(run.uniqueCount);
+      await chrome.action.setBadgeText({text});await chrome.action.setBadgeBackgroundColor({color:failed?'#c43140':'#2852d9'});
+    }
+    async function heartbeat(run){if(run.running)await chrome.alarms.create(HEARTBEAT,{periodInMinutes:.5});else await chrome.alarms.clear(HEARTBEAT);}
+    async function scanWindow(run){
+      const window=await chrome.windows.get(run.windowId,{populate:true});
+      if(run.anchorUrl&&Array.isArray(window.tabs)&&!window.tabs.some(tab=>tab.url===run.anchorUrl))throw new Error('Tarama penceresi artık bulunamıyor.');
+      return window;
+    }
+    async function ensureWindow(run){
+      if(Number.isInteger(run.windowId)){
+        try{await scanWindow(run);await chrome.windows.update(run.windowId,{focused:true,state:'normal'});return;}
+        catch{const error=new Error('Tarama penceresi kapatıldı.');error.windowGone=true;throw error;}
+      }
+      const anchor=chrome.runtime.getURL('sidepanel.html')+'?scan='+run.id;
+      const existing=chrome.windows.getAll?await chrome.windows.getAll({populate:true}):[];
+      let window=existing.find(window=>window.tabs?.some(tab=>tab.url===anchor));
+      if(!window)window=await chrome.windows.create({url:anchor,type:'normal',focused:true});
+      run.windowId=window.id;run.anchorUrl=anchor;run.anchorTabId=window.tabs?.[0]?.id??null;
+      await log(run,'Tarama penceresi açıldı',`Pencere ${window.id}`);
+    }
+    async function windowClosed(windowId){
+      const run=await read();if(!run||run.windowId!==windowId)return;
+      if(run.phase==='done'&&!run.active){run.windowId=null;await log(run,'Tarama penceresi kapatıldı','Tamamlanmış tarama ve rapor korundu.');return;}
+      if(run.active){run.queue.unshift({...run.active.piece,seenIds:run.active.seenIds});run.active=null;}
+      run.windowId=null;run.running=false;run.phase='paused';run.stopReason='durduruldu: pencere kapatıldı';
+      clearTimeout(timer);clearTimeout(closeTimer);
+      for(const name of [NEXT,TIMEOUT,CLOSE,HEARTBEAT])await chrome.alarms.clear(name);
+      await log(run,'Durduruldu','pencere kapatıldı');await progress(run);
+    }
+    async function ready(run){
+      const active=run.active;
+      for(let attempt=1;attempt<=5;attempt++){
+        let pong;try{pong=await chrome.tabs.sendMessage(active.tabId,{type:'PING'},{frameId:0});}catch{}
+        if(pong?.ok&&pong.ready){await log(run,'Content script hazır',`PING ${attempt}/5`);return true;}
+        await log(run,'Content script hazır değil',`PING ${attempt}/5 yanıt vermedi`);
+        if(attempt<5)await sleep(1000);
+      }
+      await log(run,'Content script enjekte ediliyor','Beş PING denemesi sonuçsuz kaldı.');
+      await chrome.scripting.executeScript({target:{tabId:active.tabId},files:['ad-data.js','scan-loop.js','content.js','chunk-bridge.js']});
+      let pong;try{pong=await chrome.tabs.sendMessage(active.tabId,{type:'PING'},{frameId:0});}catch{}
+      await log(run,pong?.ok&&pong.ready?'Content script hazır':'Content script hazır değil','Enjeksiyon sonrası PING');
+      return Boolean(pong?.ok&&pong.ready);
+    }
+    const close = async (tabId, expected = null, windowId=null) => {
       if (!Number.isInteger(tabId)) return;
       // Tab IDs can be reused across browser restarts. Never close an unrelated tab.
       try {
         const tab = await chrome.tabs.get(tabId);
-        if (expected) {
+        if (expected && tab.windowId!==windowId) {
           const actual = new URL(tab.url), wanted = new URL(expected);
           const identity=[...wanted.searchParams.keys()].filter(name=>/date/i.test(name)&&date(wanted.searchParams.get(name))).concat(['q','view_all_page_id','country']);
           if(actual.origin!==wanted.origin || actual.pathname.replace(/\/$/,'')!==wanted.pathname.replace(/\/$/,'') || identity.some(name=>wanted.searchParams.has(name)&&actual.searchParams.get(name)!==wanted.searchParams.get(name)))return;
         }
-        await chrome.tabs.remove(tabId);
-      } catch { /* Already closed. */ }
+        await chrome.tabs.remove(tabId);return true;
+      } catch { return false; }
     };
     async function poolFor(run) {
       if (cacheId !== run.id) { cacheId = run.id; pool = new Map(); cachedKeys = new Set(); locations = new Map(); }
@@ -142,10 +203,11 @@
       return pool;
     }
     async function progress(run) {
+      await badge(run);
       return hooks.publishProgress({ ads: [], scrollCount: run.scrollCount, scan: { running: run.running, sessionId: run.id, sourceUrl: run.baseUrl, reason: run.phase === 'done' ? 'visible-complete' : run.running ? 'running' : 'stopped' } }, { ads: run.uniqueCount, scrolls: run.scrollCount, status: run.running ? 'scanning' : run.phase === 'done' ? 'completed' : 'stopped', chunk: true });
     }
     async function schedule(run, delay = 0) {
-      run.nextAt = now() + delay; await save(run);
+      run.nextAt = now() + delay; await log(run,'Parçalar arası bekleme',`${Math.ceil(delay/1000)} saniye`);
       await chrome.alarms.create(NEXT, { when: run.nextAt });
       clearTimeout(timer);
       // Alarm survives suspension; the timer keeps a 20-second wait accurate while awake.
@@ -160,7 +222,8 @@
     }
     async function start(config, sourceTabId = null) {
       config = settings(config);
-      const stored = await chrome.storage.local.get(['scan', 'chunkRun', 'scanBatches', 'settings']);
+      let stored = await chrome.storage.local.get(['scan', 'chunkRun', 'scanBatches', 'settings']);
+      if(stored.chunkRun?.active?.phase==='failure-hold'&&!stored.chunkRun.running){if(now()<stored.chunkRun.active.closeAt)throw new Error('20 saniyelik teşhis süresi tamamlanmalı.');await closeFailed();stored=await chrome.storage.local.get(['scan','chunkRun','scanBatches','settings']);}
       if (stored.scan?.running || stored.chunkRun?.running) throw new Error('Önce çalışan taramayı durdur.');
       let tab;
       try{tab=Number.isInteger(sourceTabId)?await chrome.tabs.get(sourceTabId):(await chrome.tabs.query({active:true,currentWindow:true}))[0];}
@@ -171,41 +234,48 @@
       await chrome.storage.local.set({ chunkRun: run, chunkConfig: config, ads: [], scrollCount: 0, scan: { running: false, reason: '', sourceUrl: tab.url }, scanBatches: null });
       const obsolete = [...(stored.chunkRun?.poolKeys || []), ...(stored.scanBatches?.keys || [])];
       if (obsolete.length) await chrome.storage.local.remove(obsolete);
-      await progress(run); await next(); return { ok: true };
+      await log(run,'Parçalı tarama başlatıldı',`${run.queue.length} parça`);await heartbeat(run);await progress(run); await next(); return { ok: true };
     }
     async function next() {
       const run = await read(); if (!run?.running || run.active) return;
       if (run.nextAt > now()) { await chrome.alarms.create(NEXT, { when: run.nextAt }); return; }
       if (!run.queue.length) { await finishRun(run); return; }
       const piece = run.queue.shift();
+      run.openCounts??={};
+      if(run.done.some(item=>key(item.piece)===key(piece))){await log(run,'Parça atlandı','Bu parça daha önce tamamlandı.',piece);await schedule(run,1);return;}
+      if((run.openCounts[key(piece)]||0)>=MAX_OPENS){run.done.push({piece,status:'failed',error:'2/2 sekme açılışı sınırı; üçüncü kez açılmadı.',count:0});await log(run,'Parça başarısız','2/2 sekme açılışı sınırı; üçüncü kez açılmadı.',piece);await schedule(run,1);return;}
+      run.openCounts[key(piece)]=(run.openCounts[key(piece)]||0)+1;
       run.active = { piece, sessionId: crypto.randomUUID(), tabId: null, phase: 'creating', deadline: now() + 45000, startedAt: now(), scrolls: 0, count: 0, seenIds: piece.seenIds || [], orderIds:[], total: null };
       run.currentUrl=pieceUrl(run.baseUrl,piece);run.firstUrl??=run.currentUrl;
-      run.phase = 'running'; await save(run); await chrome.alarms.create(TIMEOUT, { when: run.active.deadline });
+      run.phase = 'running'; await log(run,'Parça başladı',`Açılış ${run.openCounts[key(piece)]}/2`); await heartbeat(run);await chrome.alarms.create(TIMEOUT, { when: run.active.deadline });
       try {
-        const tab = await chrome.tabs.create({ url: pieceUrl(run.baseUrl, piece), active: true });
-        run.active.tabId = tab.id; run.active.phase = 'loading'; await save(run); await progress(run);
+        await ensureWindow(run);
+        const tab = await chrome.tabs.create({windowId:run.windowId,url:pieceUrl(run.baseUrl,piece),active:true});
+        run.active.tabId = tab.id; run.active.phase = 'loading'; await log(run,'Sekme açıldı',`Sekme ${tab.id}, pencere ${run.windowId}`); await progress(run);
         if (tab.status === 'complete') await loaded(tab.id);
-      } catch { await retry('Parça sekmesi açılamadı.'); }
+      } catch(error) {if(error.windowGone){await windowClosed(run.windowId);return;}await retry('Parça sekmesi açılamadı: '+error.message);}
     }
     async function loaded(tabId) {
       let run = await read(), active = run?.active;
       if (!run?.running || active?.tabId !== tabId || active.phase !== 'loading') return;
-      active.phase = 'probing'; await save(run);
+      const tab=await chrome.tabs.get(tabId).catch(()=>null);if(tab?.status!=='complete')return;
+      active.phase = 'probing'; await log(run,'Sayfa yüklendi','Sonuç sayısı bekleniyor (10–25 saniye).');
       try {
         const [probe] = await chrome.scripting.executeScript({ target: { tabId }, func: probePage });
         const result = probe?.result;
-        if (!result || result.blocked || !library(result.url)) { await retry('Meta sayfası yüklenmedi, erişimi kısıtladı veya giriş istiyor.'); return; }
+        if (!result || result.loaded===false || result.blocked || !library(result.url)) { await retry('Meta sayfası yüklenmedi, erişimi kısıtladı veya giriş istiyor.'); return; }
         active.total = Number.isSafeInteger(result.total) && result.total >= 0 ? result.total : null;
-        await save(run);
+        await log(run,'Sonuç sayısı okundu',active.total===null?'okunamadı; sıfır sayılmadan tarama denenecek':String(active.total));
         if (active.total === 0) { await settle('empty'); return; }
         if (active.total > run.config.limit) { await divide('Meta sonuç sayısı parça sınırını aşıyor.'); return; }
+        active.phase='readiness';await save(run);
+        if(!await ready(run)){await retry('Content script enjeksiyon sonrası PING yanıtı vermedi.');return;}
         active.phase = 'starting'; active.deadline = now() + 600000; await save(run);
         await chrome.alarms.create(TIMEOUT, { when: active.deadline });
-        await chrome.scripting.executeScript({ target: { tabId }, files: ['ad-data.js', 'scan-loop.js', 'content.js'] });
         const response = await chrome.tabs.sendMessage(tabId, { type: 'META_SCAN_START', tabId, sessionId: active.sessionId, settings: { autoScroll: true, autoRefresh: false, speed: run.speed, maxAds: run.config.limit } }, { frameId: 0 });
         if (!response?.ok) throw new Error('Tarama motoru başlatılamadı.');
-        active.phase = 'scanning'; await save(run); await progress(run);
-      } catch { await retry('Parça yüklenmedi veya tarama motoru başlatılamadı.'); }
+        active.phase = 'scanning';run.lastError=''; await log(run,'Tarama başladı','Mevcut tarama motoru çalışıyor.'); await progress(run);
+      } catch(error) {await retry('Sayfa yüklenmedi veya tarama başlatılamadı: '+error.message);}
     }
     async function append(run, incoming) {
       const map = await poolFor(run), seen = new Set(run.active.seenIds);
@@ -257,6 +327,7 @@
       if (Number.isSafeInteger(message.discovery?.reportedTotal)) active.total = message.discovery.reportedTotal;
       try { if (incoming.length) await append(run, incoming); else await save(run); }
       catch { await failSafe(); throw new Error('Parça verileri kaydedilemedi; kaydedilen paketler korundu.'); }
+      if(active.phase==='failure-hold')return {ok:true,progress:await progress(run)};
       if (message.type === 'META_SCAN_FINISHED') {
         const dated = incoming.filter(ad => date(ad.startDate)), before = dated.filter(ad => ad.startDate < active.piece.start);
         if (dated.length && before.length / dated.length > 0.25) run.overlap = true;
@@ -267,14 +338,15 @@
         await save(run);
         if (!run.running) { await detach(run); return { ok: true, progress: await progress(await read()) }; }
         if (message.reason === 'limit') { run.scannedParts++; await save(run); await divide('Tarama parça sınırına ulaştı.'); }
-        else if (!['meta-exhausted', 'visible-complete', 'no-new-ads'].includes(message.reason) || !incoming.length || active.total !== null && incoming.length < active.total) await retry('Meta daha fazla reklam yüklemedi veya parça taraması kesildi.');
+        else if (!['meta-exhausted', 'visible-complete', 'no-new-ads'].includes(message.reason) || !incoming.length) await retry(`Motor ${message.reason||'bilinmeyen durum'}; ${incoming.length} reklam toplandı, Meta sonucu ${active.total??'okunamadı'}.`);
         else { run.scannedParts++; await save(run); await settle('done'); }
       }
       return { ok: true, progress: await progress(await read()) };
     }
     async function disposeActive(run) {
+      const piece=run.active?.piece;run.lastPiece=piece||run.lastPiece;
       const tabId = run.active?.tabId, expected = run.active ? pieceUrl(run.baseUrl, run.active.piece) : null;
-      run.active = null; await save(run); await chrome.alarms.clear(TIMEOUT); await close(tabId, expected);
+      run.active = null; await save(run); await chrome.alarms.clear(TIMEOUT);if(Number.isInteger(tabId)){const closed=await close(tabId,expected,run.windowId);await log(run,closed?'Sekme kapatıldı':'Sekme kapatılamadı',closed?'Parça işlemi tamamlandı.':'Sekme zaten kapalı veya sahipliği doğrulanamadı.',piece);}
     }
     async function detach(run) {
       if (run.active) run.queue.unshift({ ...run.active.piece, seenIds: run.active.seenIds });
@@ -282,6 +354,8 @@
     }
     async function settle(status, error = '') {
       const run = await read(), active = run?.active; if (!active) return;
+      if(status==='failed'){await retry(error,true);return;}
+      await log(run,status==='empty'?'Parça atlandı':'Parça bitti',status==='empty'?'Sayfada açıkça sıfır sonuç gösterildi.':`${active.count} reklam; Meta: ${active.total??'okunamadı'}. Motor: tamamlandı.`);
       run.done.push({ piece: active.piece, status, error, count: active.count, speed: active.speed || 0, slow: active.slow || false, total: active.total });
       run.last = { label: label(active.piece), count: active.count, total:active.total, speed: active.speed || 0, slow: active.slow || false };
       await disposeActive(run);
@@ -291,19 +365,35 @@
       const run = await read(), active = run?.active; if (!active) return;
       const children = split(active.piece, run.baseUrl);
       if (!children.length) { await settle('failed', '1 günlük medya/platform parçası da sınırı aşıyor; kısmi veriler korundu.'); return; }
+      await log(run,'Parça atlandı',reason+' Daha küçük alt parçalar kuyruğa eklendi.');
       run.splits.push({ piece: active.piece, reason }); run.queue.unshift(...children);
       await disposeActive(run); await schedule(run, wait(run));
     }
-    async function retry(error) {
-      const run = await read(), active = run?.active; if (!active) return;
-      if (!run.running) { await detach(run); return; }
-      const attempt = (active.piece.attempt || 0) + 1;
-      if (attempt > 2) { await settle('failed', error); return; }
-      run.queue.unshift({ ...active.piece, attempt, seenIds: active.seenIds }); run.lastError = `${label(active.piece)}: ${error} Yeniden deneme ${attempt}/2`;
-      await disposeActive(run); await schedule(run, wait(run) * 2 ** attempt);
+    async function retry(error,terminal=false) {
+      const run=await read(),active=run?.active;if(!active||active.phase==='failure-hold')return;
+      if(!run.running){await detach(run);return;}
+      const opens=run.openCounts?.[key(active.piece)]??(active.piece.attempt||0)+1;
+      active.failure={error,retry:!terminal&&opens<MAX_OPENS,opens,waitMs:wait(run)*2**opens};
+      active.phase='failure-hold';active.closeAt=now()+20000;run.phase='failure-hold';run.lastError=error;
+      await log(run,'Parça başarısız',`${error} Sekme teşhis için 20 saniye açık tutuluyor.`);
+      await chrome.alarms.create(CLOSE,{when:active.closeAt});clearTimeout(closeTimer);
+      closeTimer=setTimeout(()=>{void enqueue(closeFailed).catch(failSafe);},20000);closeTimer?.unref?.();
+      await progress(run);
+      await chrome.tabs.sendMessage(active.tabId,{type:'META_SCAN_STOP',sessionId:active.sessionId},{frameId:0}).catch(()=>{});
+    }
+    async function closeFailed(){
+      const run=await read(),active=run?.active;if(active?.phase!=='failure-hold')return;
+      if(now()<active.closeAt){await chrome.alarms.create(CLOSE,{when:active.closeAt});clearTimeout(closeTimer);closeTimer=setTimeout(()=>{void enqueue(closeFailed).catch(failSafe);},active.closeAt-now());closeTimer?.unref?.();return;}
+      const failure=active.failure;run.last={label:label(active.piece),count:active.count,total:active.total,speed:active.speed||0,slow:active.slow||false};
+      if(failure.retry){run.queue.unshift({...active.piece,attempt:failure.opens,seenIds:active.seenIds});await log(run,'Yeniden deneme 1/2',failure.error);}
+      else{run.done.push({piece:active.piece,status:'failed',error:failure.error,count:active.count,total:active.total});await log(run,'Parça başarısız',failure.error+' Açılış sınırı doldu veya parça bölünemiyor; sonraki parçaya geçiliyor.');}
+      await log(run,'Sekme kapatılıyor','20 saniyelik teşhis süresi tamamlandı.');
+      await disposeActive(run);await chrome.alarms.clear(CLOSE);run.phase=run.running?'queued':'paused';
+      if(!run.running){await save(run);await progress(run);return;}
+      if(run.queue.length)await schedule(run,failure.retry?failure.waitMs:wait(run));else await finishRun(run);
     }
     async function finishRun(run) {
-      run.running = false; run.phase = 'done'; run.finishedAt = now();
+      run.running = false; run.phase = 'done'; run.finishedAt = now();await log(run,'Tüm parçalar tamamlandı',`${run.uniqueCount} benzersiz reklam; ${run.done.filter(item=>item.status==='failed').length} başarısız parça`);await heartbeat(run);
       const { telegramConfig } = await chrome.storage.local.get('telegramConfig');
       run.notification = telegramConfig?.enabled ? { status: 'queued', attempts: 0, nextAt: now(), text: summary(run) } : { status: 'disabled' };
       await save(run); clearTimeout(timer); await chrome.alarms.clear(NEXT); await progress(run);
@@ -323,7 +413,8 @@
     }
     async function pause() {
       const run = await read(); if (!run?.running) return { ok: true };
-      run.running = false; run.phase = 'paused'; clearTimeout(timer); await chrome.alarms.clear(NEXT); await save(run); await progress(run);
+      run.running = false; run.phase = 'paused';await log(run,'Durduruldu','Kullanıcı taramayı durdurdu.');await heartbeat(run); clearTimeout(timer); await chrome.alarms.clear(NEXT); await save(run); await progress(run);
+      if(run.active?.phase==='failure-hold')return {ok:true};
       if (run.active) {
         run.active.phase = 'stopping'; await save(run);
         await chrome.alarms.create(TIMEOUT, { when: now() + 5000 });
@@ -336,49 +427,72 @@
       const run = await read(), { scan } = await chrome.storage.local.get('scan');
       if (!run || run.phase === 'done' || run.running || scan?.running) throw new Error('Devam edilecek durmuş bir parçalı tarama yok.');
       if(run.active?.phase==='stopping')throw new Error('Son reklam paketi kaydediliyor; birkaç saniye sonra Devam Et ile yeniden dene.');
+      if(run.active?.phase==='failure-hold'){delete run.stopReason;run.running=true;run.phase='failure-hold';await log(run,'Devam edildi','Teşhis beklemesi sürüyor.');await heartbeat(run);await progress(run);return {ok:true};}
       if (run.active) await detach(run);
-      run.running = true; run.visible = true; run.phase = 'queued'; run.nextAt = now(); await save(run); await progress(run); await next(); return { ok: true };
+      delete run.stopReason;run.lastError='';run.running = true; run.visible = true; run.phase = 'queued'; run.nextAt = now(); await log(run,'Devam edildi','Kalıcı kuyruk yükleniyor.');await heartbeat(run);await progress(run); await next(); return { ok: true };
     }
     async function hide() {
       const run = await read(); if (run?.running) throw new Error('Önce parçalı taramayı durdur.');
+      if(run?.active?.phase==='failure-hold')throw new Error('Hatalı sekmenin 20 saniyelik teşhis süresi tamamlanmalı.');
       if(run?.active?.phase==='stopping')throw new Error('Son reklam paketi kaydediliyor; birkaç saniye sonra yeniden dene.');
       if(run?.active)await detach(run);
-      if(run){run.visible=false;await save(run);}
+      if(run){run.visible=false;await save(run);await chrome.action?.setBadgeText({text:''});}
     }
     async function clear() {
       const run = await read(); if (run?.running) throw new Error('Önce parçalı taramayı durdur.');
+      if(run?.active?.phase==='failure-hold'&&now()<run.active.closeAt)throw new Error('20 saniyelik teşhis süresi tamamlanmalı.');
       if (run?.active) await disposeActive(run);
       await chrome.storage.local.set({ chunkRun: null }); if (run?.poolKeys.length) await chrome.storage.local.remove(run.poolKeys);
-      pool = new Map(); cacheId = null;
+      pool = new Map(); cacheId = null;await chrome.action?.setBadgeText({text:''});
     }
-    async function recover(startup = false) {
-      const run = await read(); if (!run) return;
-      if (startup && (run.running || run.active)) { run.running = false; run.phase = 'paused'; if (run.active) await detach(run); else await save(run); }
-      else if (run.active && run.running) {
-        if (run.active.phase === 'loading') await loaded(run.active.tabId);
-        else {
-          let status; try { status = await chrome.tabs.sendMessage(run.active.tabId, { type: 'META_SCAN_STATUS' }, { frameId: 0 }); } catch {}
-          if (!status?.running || status.sessionId !== run.active.sessionId) await retry('Tarama bağlantısı yeniden kurulamadı.');
+    async function recover() {
+      let run=await read();if(!run)return;
+      if(Number.isInteger(run.windowId)){
+        try{await scanWindow(run);}catch{await windowClosed(run.windowId);return;}
+      }
+      await heartbeat(run);
+      if(run.active?.phase==='failure-hold'){await closeFailed();return;}
+      if(run.running&&run.active){
+        const active=run.active;
+        if(now()>=active.deadline){await retry('Parça yükleme/tarama zaman aşımı.');return;}
+        if(!Number.isInteger(active.tabId)&&Number.isInteger(run.windowId)){
+          const candidates=await chrome.tabs.query({windowId:run.windowId});
+          active.tabId=candidates.find(tab=>tab.url===pieceUrl(run.baseUrl,active.piece))?.id??null;await save(run);
         }
-      } else if (run.running) await schedule(run, Math.max(0, run.nextAt - now()));
-      const current = await read();
-      if (['queued', 'retrying'].includes(current.notification?.status)) await chrome.alarms.create(REPORT, { when: Math.max(now() + 100, current.notification.nextAt) });
+        let tab;try{tab=await chrome.tabs.get(active.tabId);}catch{await retry('Tarama sekmesi bulunamadı.');return;}
+        if(tab.status==='loading')return;
+        let status;try{status=await chrome.tabs.sendMessage(active.tabId,{type:'META_SCAN_STATUS'},{frameId:0});}catch{}
+        if(status?.running&&status.sessionId===active.sessionId){if(active.phase!=='scanning'){active.phase='scanning';await log(run,'Tarama devam ediyor','Worker yeniden bağlandı.');}return;}
+        if(active.phase==='scanning'){await retry('Tarama bağlantısı kesildi; aynı parça açılış sınırı korunuyor.');return;}
+        active.phase='loading';await log(run,'Worker devam ediyor','Mevcut sekmede yükleme/hazırlık adımı sürdürülüyor.');await loaded(active.tabId);
+      }else if(run.running)await next();
+      run=await read();if(['queued','retrying'].includes(run.notification?.status))await chrome.alarms.create(REPORT,{when:Math.max(now()+100,run.notification.nextAt)});
     }
     async function failSafe() {
-      // Leave acknowledged pool batches intact even when a later storage/tab call fails.
-      const run = await read().catch(() => null); if (!run) return;
-      run.running = false; run.phase = 'paused'; run.lastError = 'Parça yöneticisi durdu; kaydedilen veriler korunuyor. Devam Et ile yeniden dene.';
-      await save(run).catch(() => {});
-      await progress(run).catch(() => {});
-      if(run.active)await chrome.tabs.sendMessage(run.active.tabId,{type:'META_SCAN_STOP',sessionId:run.active.sessionId},{frameId:0}).catch(()=>{});
+      const run=await read().catch(()=>null);if(!run)return;
+      run.running=false;run.phase='paused';run.lastError='Parça yöneticisi durdu; kaydedilen veriler korunuyor. Devam Et ile yeniden dene.';
+      if(run.active&&run.active.phase!=='failure-hold'){
+        const opens=run.openCounts?.[key(run.active.piece)]||1;
+        run.active.phase='failure-hold';run.active.closeAt=now()+20000;
+        run.active.failure={error:run.lastError,retry:opens<MAX_OPENS,opens,waitMs:wait(run)*2**opens};
+      }
+      await log(run,'Yönetici hatası',run.lastError+' Sekme en az 20 saniye açık tutulur.').catch(()=>{});
+      await heartbeat(run).catch(()=>{});await progress(run).catch(()=>{});
+      if(run.active){
+        await chrome.alarms.create(CLOSE,{when:run.active.closeAt}).catch(()=>{});
+        clearTimeout(closeTimer);closeTimer=setTimeout(()=>{void enqueue(closeFailed).catch(()=>{});},Math.max(0,run.active.closeAt-now()));closeTimer?.unref?.();
+        await chrome.tabs.sendMessage(run.active.tabId,{type:'META_SCAN_STOP',sessionId:run.active.sessionId},{frameId:0}).catch(()=>{});
+      }
     }
     chrome.alarms.onAlarm.addListener(info => {
-      if (![NEXT, TIMEOUT, REPORT].includes(info.name)) return;
+      if (![NEXT,TIMEOUT,REPORT,CLOSE,HEARTBEAT].includes(info.name)) return;
       void enqueue(async () => {
+        if(info.name===CLOSE)await closeFailed();
+        if(info.name===HEARTBEAT)await recover();
         if (info.name === NEXT) await next();
         if (info.name === REPORT) await report();
         if (info.name === TIMEOUT) {
-          const run = await read(); if (!run?.active) return;
+          const run = await read(); if (!run?.active||run.active.phase==='failure-hold') return;
           if (!run.running) await detach(run); else if (now() >= run.active.deadline) await retry('Parça yükleme/tarama zaman aşımı.');
         }
       }).catch(failSafe);
@@ -393,11 +507,13 @@
         }
       }).catch(failSafe);
     });
-    chrome.tabs.onRemoved.addListener(tabId => { void enqueue(async () => { const run = await read(); if (run?.active?.tabId === tabId) await retry('Parça sekmesi kapandı.'); }).catch(failSafe); });
+    chrome.tabs.onRemoved.addListener(tabId => { void enqueue(async () => { const run = await read(); if (run?.active?.tabId === tabId) {if(run.windowId!=null){try{await scanWindow(run);}catch{await windowClosed(run.windowId);return;}}if(run.active.phase==='failure-hold'){await log(run,'Sekme kullanıcı tarafından kapatıldı','Teşhis süresi ve yeniden deneme sınırı korunuyor.');return;}await retry('Parça sekmesi kapandı.');} }).catch(failSafe); });
+    chrome.windows.onRemoved.addListener(windowId=>{void enqueue(()=>windowClosed(windowId)).catch(failSafe);});
+    if(hooks.autoRecover!==false)void enqueue(recover).catch(failSafe);
     chrome.runtime.onStartup.addListener(() => { void enqueue(() => recover(true)).catch(failSafe); });
     chrome.runtime.onInstalled.addListener(() => { void enqueue(() => recover(false)).catch(failSafe); });
-    return { start, next, loaded, owns, content, pause, resume, clear, hide, view, progress, recover, report, read };
+    return { start, next, loaded, log, closeFailed, windowClosed, owns, content, pause, resume, clear, hide, view, progress, recover, report, read };
   }
-  const api = { create, ranges, split, pieceUrl, library, settings, label, key, today, parseResults, probePage, rankPage, summary, LIBRARY_HELP, OVERLAP, SLOW };
+  const api = { create, ranges, split, pieceUrl, library, settings, label, key, today, parseResults, probePage, rankPage, summary, MAX_OPENS, LIBRARY_HELP, OVERLAP, SLOW };
   root.ChunkScan = api; if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(globalThis);

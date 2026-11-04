@@ -448,3 +448,6 @@ async function resumeRefresh(tabId){
 }
 
 chrome.runtime.onStartup.addListener(()=>{void enqueue(async()=>{const state=await readState();if(state.scan.refreshing){try{const tab=await chrome.tabs.get(state.scan.tabId);if(tab.status==='complete')await resumeRefresh(tab.id);}catch{await finish(state,'disconnected');}}}).catch(()=>{});});
+
+// Keep the action popup for settings; the explicit popup button opens the panel.
+if(chrome.sidePanel)void chrome.sidePanel.setPanelBehavior({openPanelOnActionClick:false}).catch(()=>{});

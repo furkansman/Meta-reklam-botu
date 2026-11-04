@@ -11,6 +11,7 @@
   <script src="chunk-export.js" defer></script>
   <script src="chunk-popup.js" defer></script>
   <script src="popup.js" defer></script>
+  <script src="sidepanel-launch.js" defer></script>
 </head>
 <body class="popup-body">
   <div class="popup-container" aria-label="Meta Reklam Botu paneli">
@@ -50,6 +51,7 @@
           <div class="maximum-row box"><label for="max-ads">Maksimum Reklam:</label><input id="max-ads" type="number" min="1" max="10000" step="1" value="100" required></div>
         </form>
         <form id="chunk-form" class="card chunk-controls" aria-label="Parçalı tarama ayarları">
+          <button id="open-side-panel" type="button" class="secondary">Yan paneli aç</button>
           <label class="toggle"><input id="chunk-enabled" type="checkbox"> Parçalı tarama</label>
           <fieldset id="chunk-fields" disabled hidden>
             <div class="chunk-grid">
@@ -146,7 +148,7 @@
     </section>
       <p id="feedback" class="feedback" role="status" aria-live="polite"></p>
     </main>
-    <footer><span class="footer-brand">Meta Reklam Botu</span><span class="footer-state"><i aria-hidden="true"></i> Yerel çalışma alanı</span><span>v0.10.1</span></footer>
+    <footer><span class="footer-brand">Meta Reklam Botu</span><span class="footer-state"><i aria-hidden="true"></i> Yerel çalışma alanı</span><span>v0.11.0</span></footer>
   </div>
 </body>
 </html>

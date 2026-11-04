@@ -37,7 +37,7 @@
       const label = active ? pieceLabel(active.piece) : run.last?.label || (run.queue[0] ? pieceLabel(run.queue[0]) : 'Tamamlandı');
       const number = value => value.toLocaleString('tr-TR');
       $('#chunk-progress').textContent = `Parça ${current}/${total} (${label}) · sonuç ${estimate!=null?'~'+number(estimate):'okunamadı'} · toplanan ${number(count)} · toplam benzersiz ${number(run.uniqueCount)} · ham: ${number(run.rawCount)} · ${Math.round(speed)} reklam/dk${slow ? ' · Hız düştü, sekme öne alınmalı ya da dinlenmeli' : ''}`;
-      const notes = [run.phase === 'done' ? 'Parçalı tarama tamamlandı.' : !run.running ? 'Duraklatıldı. Devam Et ile kaldığın parçadan sürdürebilirsin.' : !active ? 'Sonraki parça bekleniyor.' : '', run.overlap ? 'Meta filtresi pencerede yayında olan reklamları getiriyor, parçalar çakışabilir' : '', run.lastError || '', run.notification?.status === 'failed' ? 'Telegram özeti gönderilemedi: ' + run.notification.error : ''];
+      const notes = [run.stopReason || (run.phase === 'done' ? 'Parçalı tarama tamamlandı.' : !run.running ? 'Duraklatıldı. Devam Et ile kaldığın parçadan sürdürebilirsin.' : !active ? 'Sonraki parça bekleniyor.' : ''), run.overlap ? 'Meta filtresi pencerede yayında olan reklamları getiriyor, parçalar çakışabilir' : '', run.lastError || '', run.notification?.status === 'failed' ? 'Telegram özeti gönderilemedi: ' + run.notification.error : ''];
       $('#chunk-feedback').textContent = startError || notes.filter(Boolean).join(' ');
       const failures = run.done.filter(item => item.status === 'failed');
       $('#chunk-failures').hidden = !failures.length;
