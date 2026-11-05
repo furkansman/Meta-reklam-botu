@@ -1,73 +1,40 @@
-(function (root) {
-  'use strict';
-  function create({ command, refreshState, perform, getState, isReady, isBusy }) {
-    const $ = selector => document.querySelector(selector);
-    const end = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Istanbul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-    $('#chunk-end').value = end(); $('#chunk-end').max = end(); $('#chunk-start').max = end();
-    let populated = false, startError='', attemptedUrl='', firstPreview='';
-    const resumable = () => { const run = getState().chunkRun; return Boolean(run?.visible && !run.running && run.phase !== 'done' && run.active?.phase !== 'stopping'); };
-    const pieceLabel = piece => `${piece.start}${piece.start !== piece.end ? ' → ' + piece.end : ''}${piece.media ? ' · ' + piece.media : ''}${piece.platform ? ' · ' + piece.platform : ''}`;
-    function render() {
-      const state = getState(), run = state.chunkRun, active = run?.active;
-      if (!populated && isReady()) {
-        const config = state.chunkConfig;
-        if (config) for (const [key, id] of Object.entries({ start: 'start', end: 'end', unit: 'unit', limit: 'limit', waitMin: 'wait-min', waitMax: 'wait-max' })) $(`#chunk-${id}`).value = config[key];
-        $('#chunk-enabled').checked = Boolean(run?.visible); populated = true;
-      }
-      const locked = !isReady() || isBusy() || state.scan?.running || run?.running;
-      $('#chunk-enabled').disabled = Boolean(locked);
-      $('#chunk-fields').disabled = Boolean(locked || !$('#chunk-enabled').checked);
-      $('#chunk-fields').hidden = !$('#chunk-enabled').checked;
-      $('#chunk-start-button').disabled = Boolean(locked || !$('#chunk-enabled').checked);
-      for (const button of document.querySelectorAll('[data-chunk-days]')) button.disabled = Boolean(locked);
-      const visible = Boolean(run?.visible);
-      $('#chunk-progress').hidden = !visible;
-      $('#chunk-failures').replaceChildren();
-      const readUrl=attemptedUrl || (visible?run.baseUrl:'');
-      const first=firstPreview || (visible?run.firstUrl:'');
-      const query=(()=>{try{return new URL(readUrl).search.slice(1)||'(parametre yok)';}catch{return readUrl||'henüz okunmadı';}})();
-      $('#chunk-url-diagnostics').textContent=readUrl||startError ? `Okunan adres (?): ${query}\nİlk parça adresi: ${first||'henüz oluşturulmadı'}${visible&&run.currentUrl?'\nBu parça adresi: '+run.currentUrl:''}` : '';
-      if (!visible) { $('#chunk-failures').hidden = true; if(startError)$('#chunk-feedback').textContent=startError; return; }
-      const total = run.done.length + run.queue.length + (active ? 1 : 0);
-      const current = active ? run.done.length + 1 : run.done.length || Math.min(1,total);
-      const speed = active?.speed ?? (active?.count ? active.count / Math.max((Date.now() - active.startedAt) / 60000, 1 / 60) : run.last?.speed || 0);
-      const slow = run.baselineSpeed !== null && speed > 0 && speed < run.baselineSpeed * 0.5;
-      const count = active?.count ?? run.last?.count ?? 0;
-      const estimate=active?active.total:run.last?.total;
-      const label = active ? pieceLabel(active.piece) : run.last?.label || (run.queue[0] ? pieceLabel(run.queue[0]) : 'Tamamlandı');
-      const number = value => value.toLocaleString('tr-TR');
-      $('#chunk-progress').textContent = `Parça ${current}/${total} (${label}) · sonuç ${estimate!=null?'~'+number(estimate):'okunamadı'} · toplanan ${number(count)} · toplam benzersiz ${number(run.uniqueCount)} · ham: ${number(run.rawCount)} · ${Math.round(speed)} reklam/dk${slow ? ' · Hız düştü, sekme öne alınmalı ya da dinlenmeli' : ''}`;
-      const notes = [run.stopReason || (run.phase === 'done' ? 'Parçalı tarama tamamlandı.' : !run.running ? 'Duraklatıldı. Devam Et ile kaldığın parçadan sürdürebilirsin.' : !active ? 'Sonraki parça bekleniyor.' : ''), run.overlap ? 'Meta filtresi pencerede yayında olan reklamları getiriyor, parçalar çakışabilir' : '', run.lastError || '', run.notification?.status === 'failed' ? 'Telegram özeti gönderilemedi: ' + run.notification.error : ''];
-      $('#chunk-feedback').textContent = startError || notes.filter(Boolean).join(' ');
-      const failures = run.done.filter(item => item.status === 'failed');
-      $('#chunk-failures').hidden = !failures.length;
-      for (const item of failures) { const li = document.createElement('li'); li.textContent = `${pieceLabel(item.piece)}: ${item.error}`; $('#chunk-failures').append(li); }
-    }
-    $('#chunk-enabled').addEventListener('change', render);
-    for (const button of document.querySelectorAll('[data-chunk-days]')) button.addEventListener('click', () => {
-      const last = end(), days = button.dataset.chunkDays;
-      $('#chunk-start').value = days === 'all' ? '2020-09-01' : new Date(Date.parse(last) - (Number(days) - 1) * 86400000).toISOString().slice(0, 10);
-      $('#chunk-end').value = last;
-    });
-    $('#chunk-form').addEventListener('submit', event => {
-      event.preventDefault();
-      if (!$('#chunk-enabled').checked) return;
-      const config = { start: $('#chunk-start').value, end: $('#chunk-end').value, unit: $('#chunk-unit').value, limit: Number($('#chunk-limit').value), waitMin: Number($('#chunk-wait-min').value), waitMax: Number($('#chunk-wait-max').value) };
-      void perform(event.submitter, async () => {
-        startError='';attemptedUrl='';firstPreview='';$('#feedback').textContent='';$('#chunk-feedback').textContent='Aktif sekme okunuyor…';
-        try {
-          let tab;try{[tab]=await chrome.tabs.query({active:true,currentWindow:true});}catch{throw new Error('sekme bulunamadı: Aktif sekmenin adresi okunamadı.');}
-          if(!Number.isInteger(tab?.id))throw new Error('sekme bulunamadı.');
-          attemptedUrl=tab.url||'';
-          if(!ChunkScan.library(attemptedUrl))throw new Error(ChunkScan.LIBRARY_HELP);
-          const pieces=ChunkScan.ranges(ChunkScan.settings(config));firstPreview=ChunkScan.pieceUrl(attemptedUrl,pieces[0]);render();
-          await command('START_CHUNKS', { config, sourceTabId:tab.id }); await refreshState(true);
-          attemptedUrl=getState().chunkRun?.baseUrl||attemptedUrl;firstPreview=getState().chunkRun?.firstUrl||firstPreview;
-        } catch (error) { startError=error.message;$('#chunk-feedback').textContent=startError;render();throw error; }
-      }).then(render);
-    });
-    function appendDiagnostics(){if(getState().chunkRun?.visible && getState().chunkRun.overlap)$('#scan-diagnostics').textContent+=' · Meta filtresi pencerede yayında olan reklamları getiriyor, parçalar çakışabilir';}
-    return { render, resumable, appendDiagnostics };
+(function(root){
+ 'use strict';
+ function create({command,refreshState,perform,getState,isReady,isBusy}){
+  const $=s=>document.querySelector(s),number=n=>(Number(n)||0).toLocaleString('tr-TR');let populated=false,startError='',attemptedUrl='',firstPreview='';
+  const resumable=()=>{const run=getState().chunkRun;return Boolean(run?.mode==='cursor'&&run.visible&&!run.running&&run.phase!=='done'&&run.active?.phase!=='stopping');};
+  function render(){
+   const state=getState(),run=state.chunkRun,active=run?.active;
+   if(!populated&&isReady()){const config=state.chunkConfig;if(config)for(const [key,id]of Object.entries({limit:'limit',target:'target',waitMin:'wait-min',waitMax:'wait-max'}))if(config[key]!=null)$(`#chunk-${id}`).value=config[key];$('#chunk-enabled').checked=Boolean(run?.visible);populated=true;}
+   const locked=!isReady()||isBusy()||state.scan?.running||run?.running;
+   $('#chunk-enabled').disabled=Boolean(locked);$('#chunk-fields').disabled=Boolean(locked||!$('#chunk-enabled').checked);$('#chunk-fields').hidden=!$('#chunk-enabled').checked;
+   $('#chunk-start-button').disabled=Boolean(locked||!$('#chunk-enabled').checked);$('#chunk-add-pool').disabled=Boolean(locked||!$('#chunk-enabled').checked);$('#chunk-clear-pool').disabled=Boolean(locked);
+   $('#chunk-stop-button').disabled=!run?.running||isBusy();$('#chunk-resume-button').disabled=!resumable()||isBusy();
+   const visible=Boolean(run?.visible);$('#chunk-progress').hidden=!visible;$('#chunk-failures').replaceChildren();
+   const url=attemptedUrl||(visible?run.baseUrl:''),first=firstPreview||(visible?run.firstUrl:'');let query='';try{query=new URL(url).search.slice(1);}catch{}
+   $('#chunk-url-diagnostics').textContent=url?`Okunan adres (?): ${query||'(parametre yok)'}\nİlk tur adresi: ${first||'henüz oluşturulmadı'}${visible&&run.currentUrl?'\nBu tur adresi: '+run.currentUrl:''}`:'';
+   if(!visible){$('#chunk-failures').hidden=true;$('#chunk-feedback').textContent=startError;return;}
+   $('#chunk-progress').textContent=`Tur ${active?.piece.round??run.round??1} · imleç: ${run.cursor||active?.piece.cursor||'tarihsiz'} · bu turda ${number(active?.newCount??run.last?.count)} yeni · toplam benzersiz ${number(run.uniqueCount)} · Meta'nın bildirdiği ${active?.total!=null?'~'+number(active.total):run.last?.total!=null?'~'+number(run.last.total):'okunamadı'}`;
+   $('#chunk-feedback').textContent=startError||run.stopReason||run.lastError||run.statusText||(run.running?'Taranıyor…':'Durduruldu');
+   const failures=run.done.filter(item=>item.status==='failed');$('#chunk-failures').hidden=!failures.length;for(const item of failures){const li=document.createElement('li');li.textContent=`${ChunkScan.label(item.piece)}: ${item.error}`;$('#chunk-failures').append(li);}
   }
-  root.ChunkPopup = { create };
+  $('#chunk-enabled').addEventListener('change',render);
+  async function start(button,addPool){
+   const config={limit:Number($('#chunk-limit').value),target:$('#chunk-target').value===''?null:Number($('#chunk-target').value),waitMin:Number($('#chunk-wait-min').value),waitMax:Number($('#chunk-wait-max').value),addPool};
+   await perform(button,async()=>{
+    startError='';attemptedUrl='';firstPreview='';$('#chunk-feedback').textContent='Aktif sekme okunuyor…';
+    try{let tab;try{[tab]=await chrome.tabs.query({active:true,currentWindow:true});}catch{throw new Error('sekme bulunamadı: Aktif sekmenin adresi okunamadı.');}
+     if(!Number.isInteger(tab?.id))throw new Error('sekme bulunamadı.');attemptedUrl=tab.url||'';if(!ChunkScan.library(attemptedUrl))throw new Error(ChunkScan.LIBRARY_HELP);
+     ChunkScan.settings(config);firstPreview=ChunkScan.pieceUrl(attemptedUrl,{cursor:null});render();await command('START_CHUNKS',{config,sourceTabId:tab.id});await refreshState(true);
+    }catch(error){startError=error.message;render();throw error;}
+   });render();
+  }
+  $('#chunk-form').addEventListener('submit',event=>{event.preventDefault();if($('#chunk-enabled').checked)void start(event.submitter,true);});
+  $('#chunk-add-pool').addEventListener('click',event=>{void start(event.currentTarget,true);});
+  $('#chunk-stop-button').addEventListener('click',event=>{void perform(event.currentTarget,async()=>{await command('STOP_SCAN');await refreshState(true);}).then(render);});
+  $('#chunk-resume-button').addEventListener('click',event=>{void perform(event.currentTarget,async()=>{await command('RESUME_CHUNKS');await refreshState(true);}).then(render);});
+  $('#chunk-clear-pool').addEventListener('click',event=>{void perform(event.currentTarget,async()=>{await command('CLEAR_CURSOR_POOL');await refreshState(true);}).then(render);});
+  return {render,resumable,appendDiagnostics(){}};
+ }
+ root.ChunkPopup={create};
 })(globalThis);

@@ -2,7 +2,7 @@
   'use strict';
   const $=selector=>document.querySelector(selector),number=value=>(Number(value)||0).toLocaleString('tr-TR');
   let loading=false,lastEvents='',lastFailures='';
-  const pieceLabel=piece=>`${piece.start}${piece.end!==piece.start?' → '+piece.end:''}${piece.media?' · '+piece.media:''}${piece.platform?' · '+piece.platform:''}`;
+  const pieceLabel=piece=>piece.round?`Tur ${piece.round} · ${piece.cursor||'tarihsiz'}${piece.platform?' · '+piece.platform:''}`:`${piece.start}${piece.end!==piece.start?' → '+piece.end:''}${piece.media?' · '+piece.media:''}${piece.platform?' · '+piece.platform:''}`;
   async function refresh(){
     if(loading)return;loading=true;
     try{
@@ -15,9 +15,7 @@
       $('#panel-status').classList.toggle('scanning',Boolean(running));
       $('#panel-status').textContent=chunk?(run.stopReason||(!run.running&&run.phase!=='done'?'Durduruldu':null)||run.statusText||(run.running?'Taranıyor…':run.phase==='done'?'Tamamlandı':'Durduruldu')):({scanning:'Taranıyor…',stopped:'Durduruldu',completed:'Tamamlandı',ready:'Hazır'}[scanProgress?.status]||'Hazır');
       if(chunk){
-        const total=run.done.length+run.queue.length+(active?1:0),index=active?run.done.length+1:run.done.length;
-        const label=active?pieceLabel(active.piece):run.last?.label|| (run.queue[0]?pieceLabel(run.queue[0]):'Tamamlandı');
-        $('#panel-progress').textContent=`Parça ${index}/${total} (${label}) · bu parçada ${number(active?.count??run.last?.count)} reklam · toplam benzersiz ${number(run.uniqueCount)} · ${run.phase}`;
+        $('#panel-progress').textContent=`Tur ${active?.piece.round??run.round??1} · imleç: ${run.cursor||active?.piece.cursor||'tarihsiz'} · bu turda ${number(active?.newCount??run.last?.count)} yeni · toplam benzersiz ${number(run.uniqueCount)} · Meta'nın bildirdiği ${(active?.total??run.last?.total)!=null?'~'+number(active?.total??run.last?.total):'okunamadı'} · ${run.phase}`;
       }else $('#panel-progress').textContent='Uzun taramaların ilerlemesini bu panelden izleyebilirsin.';
       const failures=chunk?run.done.filter(item=>item.status==='failed'):[],failureKey=JSON.stringify(failures);
       if(failureKey!==lastFailures){lastFailures=failureKey;$('#panel-failures').replaceChildren();for(const item of failures){const li=document.createElement('li');li.textContent=`${pieceLabel(item.piece)}: ${item.error}`;$('#panel-failures').append(li);}}

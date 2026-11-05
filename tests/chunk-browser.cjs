@@ -18,9 +18,9 @@ const root = path.resolve(__dirname, '..');
     let nextId = 20, activeId = 7, clock = Date.now(), listener, worker, service;
     const source = 'https://www.facebook.com/ads/library/?q=%22implant%22&country=TR&active_status=active&search_type=keyword_exact_phrase&sort_data[mode]=total_impressions&sort_data[direction]=desc';
     const fixture = url => {
-      const second = new URL(url).searchParams.get('start_date[min]') === '2026-10-02';
-      const ids = second ? ['123456789012', '123456789013'] : ['123456789011', '123456789012'];
-      return '<main><p>~2 sonuç</p>' + ids.map(id => `<div><span>Library ID: ${id}</span><div><b>Dental Marka</b><span>Sponsored</span></div><p>Diş tedavisinde yeni çözüm.</p><p>Started running on 1 September 2026</p><p>İmplant fırsatı</p><button>Get Quote</button><button>See ad details</button></div>`).join('') + '</main>';
+      const cursor=new URL(url).searchParams.get('start_date[max]');
+      const values=cursor==='2026-10-19'?[['123456789013','19']]:cursor==='2026-10-20'?[['123456789012','20'],['123456789013','19']]:[['123456789011','21'],['123456789012','20']];
+      return '<main><p>~2 sonuç</p>'+values.map(([id,day])=>`<div><span>Library ID: ${id}</span><div><b>Dental Marka</b><span>Sponsored</span></div><p>Diş tedavisinde yeni çözüm.</p><p>Started running on ${day} October 2026</p><p>İmplant fırsatı</p><button>Get Quote</button><button>See ad details</button></div>`).join('')+'</main>';
     };
     const context = await browser.newContext({ acceptDownloads: true });
     await context.route('https://www.facebook.com/**', route => route.fulfill({ contentType: 'text/html; charset=utf-8', body: fixture(route.request().url()) }));
@@ -86,15 +86,12 @@ const root = path.resolve(__dirname, '..');
     await panel.exposeFunction('localGet',keys=>chrome.storage.local.get(keys));await panel.exposeFunction('sessionGet',keys=>chrome.storage.session.get(keys));
     await panel.addInitScript(()=>{window.chrome={storage:{local:{get:localGet},session:{get:sessionGet},onChanged:{addListener(){}}}};});await panel.goto(`http://127.0.0.1:${server.address().port}/sidepanel.html`);
     let popup = await openPopup();
-    assert.equal(await popup.locator('#chunk-start').inputValue(), '2020-09-01'); assert.equal(await popup.locator('#chunk-end').inputValue(), ChunkScan.today());
-    assert.equal(await popup.locator('#chunk-unit').inputValue(), 'week'); assert.equal(await popup.locator('#chunk-limit').inputValue(), '800'); assert(await popup.locator('#chunk-fields').isHidden());
-    await popup.click('#open-side-panel');assert.deepEqual(panels,[{windowId:7}]);
-    await popup.check('#chunk-enabled'); await popup.getByRole('button', { name: 'Son 14 gün', exact: true }).click(); assert.equal(Date.parse(await popup.locator('#chunk-end').inputValue()) - Date.parse(await popup.locator('#chunk-start').inputValue()), 13 * 86400000);
-    await popup.getByRole('button', { name: 'Tüm zamanlar', exact: true }).click(); assert.equal(await popup.locator('#chunk-start').inputValue(), '2020-09-01');
+    assert.equal(await popup.locator('#chunk-limit').inputValue(),'800');assert.equal(await popup.locator('#chunk-target').inputValue(),'');assert.equal(await popup.locator('#chunk-wait-min').inputValue(),'15');assert(await popup.locator('#chunk-fields').isHidden());
+    await popup.click('#open-side-panel');assert.deepEqual(panels,[{windowId:7}]);await popup.check('#chunk-enabled');
     queryResult=[];await popup.click('#chunk-start-button');await popup.waitForFunction(()=>document.querySelector('#chunk-feedback').textContent.includes('sekme bulunamadı'));assert.equal(store.chunkRun,undefined);
     queryResult=[{id:7,url:'https://example.org/'}];await popup.click('#chunk-start-button');await popup.waitForFunction(()=>document.querySelector('#chunk-feedback').textContent==='Önce Meta Reklam Kütüphanesi sonuç sayfasını aç, sonra başlat.');assert.equal(store.chunkRun,undefined);
     queryResult=null;
-    await popup.fill('#chunk-start', '2026-10-01'); await popup.fill('#chunk-end', '2026-10-02'); await popup.selectOption('#chunk-unit', 'day');
+    await popup.fill('#chunk-limit','2');
     await popup.click('#chunk-start-button'); await until(() => store.chunkRun?.done.length === 1 && !store.chunkRun.active);
     assert.equal(store.chunkRun.uniqueCount, 2); assert.equal(store.chunkRun.rawCount, 2); assert.equal(telegram.length, 0); assert.equal(store.history?.length || 0, 0);
     await panel.waitForFunction(()=>document.querySelector('#panel-ads').textContent==='2');assert((await panel.locator('#panel-events li').count())>0);
@@ -102,20 +99,20 @@ const root = path.resolve(__dirname, '..');
     assert.equal(store.chunkRun.running,true);await worker.enqueue(()=>service.pause());
     assert.equal(store.chunkRun.running, false); assert.equal(store.chunkRun.queue.length, 1);
     popup = await openPopup(); await popup.waitForFunction(() => document.querySelector('#ad-count').textContent === '2'); assert(!(await popup.locator('#resume-scan').isDisabled()));
-    await popup.click('#resume-scan'); await until(() => store.chunkRun?.phase === 'done');
+    await popup.click('#resume-scan');await until(()=>store.chunkRun?.done.length===2&&!store.chunkRun.active);await worker.enqueue(async()=>{});clock=store.chunkRun.nextAt;await worker.enqueue(()=>service.next());await until(()=>store.chunkRun?.phase==='done');
     await panel.waitForFunction(()=>document.querySelector('#panel-ads').textContent==='3');assert((await panel.locator('#panel-progress').innerText()).includes('toplam benzersiz 3'));
     await popup.waitForFunction(() => document.querySelector('#ad-count').textContent === '3' && !document.querySelector('#export-csv').disabled);
-    assert((await popup.locator('#chunk-url-diagnostics').innerText()).includes('Okunan adres (?): q=%22implant%22'));assert((await popup.locator('#chunk-url-diagnostics').innerText()).includes('İlk parça adresi: https://www.facebook.com/ads/library/'));assert.equal(createdWindows,1);assert.equal(opened.length, 2); assert.equal(starts.length, 2); assert(starts.every(msg => msg.settings.maxAds === 800 && msg.settings.autoRefresh === false));
-    assert.equal(store.chunkRun.rawCount, 4); assert.equal(store.chunkRun.uniqueCount, 3); assert.equal(store.chunkRun.done.length, 2); assert(store.chunkRun.overlap);
-    assert((await popup.locator('#chunk-progress').innerText()).includes('sonuç ~2'));assert((await popup.locator('#chunk-progress').innerText()).includes('toplam benzersiz 3')); assert((await popup.locator('#chunk-progress').innerText()).includes('ham: 4')); assert((await popup.locator('#scan-diagnostics').innerText()).includes(ChunkScan.OVERLAP));
+    assert((await popup.locator('#chunk-url-diagnostics').innerText()).includes('Okunan adres (?): q=%22implant%22'));assert((await popup.locator('#chunk-url-diagnostics').innerText()).includes('İlk tur adresi: https://www.facebook.com/ads/library/'));assert.equal(createdWindows,1);assert.equal(opened.length,3);assert.equal(starts.length,3);assert(starts.every(msg=>msg.settings.autoRefresh===false));assert.equal(new URL(opened[0].url).searchParams.has('start_date[max]'),false);assert.equal(new URL(opened[1].url).searchParams.get('start_date[max]'),'2026-10-20');assert.equal(new URL(opened[2].url).searchParams.get('start_date[max]'),'2026-10-19');for(const item of opened)assert.equal(new URL(item.url).searchParams.get('sort_data[mode]'),'total_impressions');
+    assert.equal(store.chunkRun.rawCount,5); assert.equal(store.chunkRun.uniqueCount, 3); assert.equal(store.chunkRun.done.length,3);
+    assert((await popup.locator('#chunk-progress').innerText()).includes("Meta'nın bildirdiği ~2"));assert((await popup.locator('#chunk-progress').innerText()).includes('toplam benzersiz 3'));assert((await popup.locator('#chunk-progress').innerText()).includes('imleç: 2026-10-19'));
     assert.equal(await popup.getByRole('tab').count(), 4); assert.equal(await popup.locator('.live-counter').count(), 2);
     for (const format of ['csv', 'json', 'excel']) {
       const pending = popup.waitForEvent('download'); await popup.click('#export-' + format); const download = await pending; const data = fs.readFileSync(await download.path());
-      if (format === 'json') { const rows = JSON.parse(data.toString()); assert.equal(rows.length, 3); assert.deepEqual(Object.keys(rows[0]), [...AdData.COLUMNS,'Sıra (gösterim sıralaması)','Parça (tarih aralığı)']);assert.equal(rows[0]['Sıra (gösterim sıralaması)'],1);assert.equal(rows[0]['Parça (tarih aralığı)'],'2026-10-01'); }
+      if (format === 'json') { const rows = JSON.parse(data.toString()); assert.equal(rows.length, 3); assert.deepEqual(Object.keys(rows[0]), [...AdData.COLUMNS,'Sıra (gösterim sıralaması)','Parça (tarih aralığı)']);assert.equal(rows.find(row=>row['Reklam ID']==='123456789011')['Sıra (gösterim sıralaması)'],1);assert.equal(rows.find(row=>row['Reklam ID']==='123456789011')['Parça (tarih aralığı)'],'Tur 1 · tarihsiz'); }
       if (format === 'csv') { assert(data.subarray(0, 3).equals(Buffer.from([239, 187, 191]))); assert(data.toString().includes('"Reklam ID","Reklam Veren","Hook"')); assert(data.toString().includes('123456789013')); }
       if (format === 'excel') { assert.equal(data.subarray(0, 2).toString(), 'PK'); assert(data.includes(Buffer.from('Reklamlar'))); assert(download.suggestedFilename().endsWith('.xlsx'));assert(data.includes(Buffer.from('Sıra (gösterim sıralaması)')));assert(data.includes(Buffer.from('A1:M4'))); }
     }
-    await worker.enqueue(() => service.report()); await worker.enqueue(() => service.report()); assert.equal(telegram.length, 1); assert(telegram[0].text.includes('Toplam benzersiz reklam: 3')); assert(telegram[0].text.includes('Taranan parça: 2')); assert.deepEqual(errors, []);
-    console.log('PASS: unchanged content.js scans two foreground date chunks, durable resume after popup/browser restart, raw 4 / unique 3, overlap diagnosis, existing counter IDs and CSV/JSON/XLSX schema, one final Telegram summary.');
+    await worker.enqueue(() => service.report()); await worker.enqueue(() => service.report()); assert.equal(telegram.length, 1); assert(telegram[0].text.includes('Toplam benzersiz reklam: 3')); assert(telegram[0].text.includes('Taranan tur: 3')); assert.deepEqual(errors, []);
+    console.log('PASS: unchanged content.js scans cursor rounds, preserves sort/filters, skips known IDs, resumes after popup/worker restart, terminates duplicate-only round without retry; panel, existing counters, CSV/JSON/XLSX and one final Telegram summary preserved.');
   } finally { await browser.close(); server.close(); }
 })().catch(error => { console.error(error); process.exit(1); });

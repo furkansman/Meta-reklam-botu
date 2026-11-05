@@ -4,7 +4,7 @@ const { webcrypto } = require('node:crypto');
 const vm = require('node:vm'), fs = require('node:fs');
 const api = require('../chunk-scan.js'), AdData = require('../ad-data.js');
 const source = 'https://www.facebook.com/ads/library/?q=implant&country=TR&active_status=active&media_type=all&start_date[min]=2026-10-01&start_date[max]=2026-10-31';
-const config = { start: '2026-10-01', end: '2026-10-02', unit: 'day', limit: 800, waitMin: 20, waitMax: 40 };
+const config={limit:800,target:null,waitMin:15,waitMax:30};
 function harness(shared = {}, worker = false) {
   const store = shared.store || {}, sessionStore = shared.sessionStore || {}, events = {}, alarms = new Map(), tabs = shared.tabs || new Map(), windows=shared.windows||new Map();
   const writes = [], requests = [], probes = [], telegram = [], progress = [], removed = [], sleeps=[];
@@ -20,7 +20,7 @@ function harness(shared = {}, worker = false) {
     windows:{async create(value){const window={id:100+windows.size,...value,tabs:[{id:100000+windows.size,url:value.url}]};windows.set(window.id,window);return window;},async get(id){if(!windows.has(id))throw new Error('closed window');return windows.get(id);},async getAll(){return [...windows.values()];},async update(id,value){Object.assign(windows.get(id),value);return windows.get(id);},onRemoved:event('windowRemoved')},
     action:{async setBadgeText(value){store.badge=value.text;},async setBadgeBackgroundColor(value){store.badgeColor=value.color;}},
     alarms: { async create(name, value) { alarms.set(name, value); }, async clear(name) { alarms.delete(name); }, onAlarm: event('alarm') },
-    scripting: { async executeScript(input) { requests.push(input); if(input.files){if(injectionReady&&input.files.includes('chunk-bridge.js'))pingReady=true;return [];} if(input.func?.name==='rankPage')return [{result:rankOrder}]; const active = store.chunkRun.active; return [{ result: { blocked: false, total: 2, url: tabs.get(active.tabId).url, ...probes.shift() } }]; } },
+    scripting: { async executeScript(input) { requests.push(input); if(input.files){if(injectionReady&&input.files.includes('chunk-bridge.js'))pingReady=true;return [];} if(input.func?.name==='rankPage')return [{result:rankOrder}];if(input.func?.name==='sortDatesPage')return [{result:shared.dates||Array(20).fill('2026-10-01')}]; const active = store.chunkRun.active; return [{ result: { blocked: false, total: 2, url: tabs.get(active.tabId).url, ...probes.shift() } }]; } },
     notifications: { onButtonClicked: event('button') }
   };
   const enqueue = task => { const result = queue.then(task); queue = result.catch(() => {}); return result; };
@@ -40,217 +40,99 @@ function harness(shared = {}, worker = false) {
 }
 const ad = (id, startDate = '2026-10-01') => ({ id: String(id), advertiser: 'Marka', fullText: 'Diş tedavisinde yeni çözüm.', hook: 'Diş tedavisinde yeni çözüm.', headline: 'Teklif', cta: 'Get Quote', startDate, mediaType: 'image', mediaUrl: 'https://example.org/ad.jpg', targetUrl: 'https://example.org/' });
 
-test('date ranges are inclusive, disjoint and cover days/weeks/calendar months including leap days', () => {
-  for (const unit of ['day', 'week', 'month']) {
-    const list = api.ranges({ start: '2024-01-31', end: '2024-04-02', unit });
-    assert.equal(list[0].start, '2024-01-31'); assert.equal(list.at(-1).end, '2024-04-02');
-    for (let i = 1; i < list.length; i++) assert.equal(Date.parse(list[i].start) - Date.parse(list[i - 1].end), 86400000);
-    assert(list.every(p => p.start <= p.end));
-  }
-  assert.throws(() => api.settings({ ...config, start: '2026-02-30' }));
-  assert.throws(() => api.settings({ ...config, waitMin: 40, waitMax: 20 }));
+test('cursor URLs retain all filters and sorting, replace encoded max duplicates, first round is dateless',()=>{
+ const base=source+'&sort_data[mode]=start_date&sort_data[direction]=desc&extra=a&extra=b&start_date%5Bmax%5D=';
+ for(const cursor of [null,'2026-10-20']){const result=new URL(api.pieceUrl(base,{cursor})),expected=new URL(base);expected.searchParams.delete('start_date[max]');if(cursor)expected.searchParams.set('start_date[max]',cursor);assert.deepEqual([...result.searchParams],[...expected.searchParams]);assert.equal(result.searchParams.get('start_date[min]'),'2026-10-01');}
+ assert.throws(()=>api.pieceUrl('https://evil.example/',{}),/Önce Meta/);
 });
-test('fixed date keys replace raw/encoded/empty duplicates and preserve all other query values', () => {
-  const base = source + '&publisher_platforms[0]=facebook&publisher_platforms[1]=instagram&extra=a&extra=b&start_date%5Bmin%5D=&start_date%5Bmax%5D=';
-  const result = new URL(api.pieceUrl(base, { start: '2026-10-14', end: '2026-10-20' }));
-  const expected=new URL(base);expected.searchParams.delete('start_date[min]');expected.searchParams.delete('start_date[max]');
-  const actual=new URL(result);actual.searchParams.delete('start_date[min]');actual.searchParams.delete('start_date[max]');
-  assert.deepEqual([...actual.searchParams],[...expected.searchParams]);
-  assert.deepEqual(result.searchParams.getAll('start_date[min]'),['2026-10-14']);assert.deepEqual(result.searchParams.getAll('start_date[max]'),['2026-10-20']);
-  assert.equal(new URL(api.pieceUrl('https://www.facebook.com/ads/library/?q=implant',config)).searchParams.get('start_date[min]'),config.start);
-  assert.throws(()=>api.pieceUrl('https://evil.example/ads/library/',config),/Önce Meta Reklam Kütüphanesi sonuç sayfasını aç, sonra başlat/);
+test('settings defaults, cursor minimum, ordering and two-round termination are deterministic',()=>{
+ assert.deepEqual(api.settings({}),{limit:800,target:null,waitMin:15,waitMax:30});assert.throws(()=>api.settings({limit:0}));assert.throws(()=>api.settings({target:-1}));
+ assert.equal(api.oldest([{startDate:'bad'},{startDate:'2026-10-05'},{startDate:'2026-09-20'}]),'2026-09-20');assert.equal(api.oldest([],null),null);
+ assert(api.descending(Array(20).fill('2026-10-01')));assert(!api.descending(Array.from({length:20},(_,i)=>'2026-10-'+String(i+1).padStart(2,'0'))));assert(!api.descending([]));
+ assert(api.exhausted(['2026-10-01','2026-10-01'],0));assert(!api.exhausted(['2026-10-02','2026-10-01'],0));assert(!api.exhausted(['2026-10-01','2026-10-01'],1));
 });
-test('user URL produces two complete weekly pieces and keeps quote/exact search/sort parameters',()=>{
-  const input='https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=TR&is_targeted_country=false&media_type=all&q=%22implant%22&search_type=keyword_exact_phrase&sort_data[direction]=desc&sort_data[mode]=total_impressions&start_date[min]=2026-10-21&start_date[max]=2026-11-04';
-  const pieces=api.ranges({...config,start:'2026-10-21',end:'2026-11-04',unit:'week'});
-  assert.deepEqual(pieces.map(p=>[p.start,p.end]),[['2026-10-21','2026-10-27'],['2026-10-28','2026-11-04']]);
-  for(const piece of pieces){const actual=new URL(api.pieceUrl(input,piece)),original=new URL(input);for(const name of ['start_date[min]','start_date[max]']){actual.searchParams.delete(name);original.searchParams.delete(name);}assert.deepEqual([...actual.searchParams],[...original.searchParams]);}
+test('dense days use learned platform parameter only and never broaden a selected platform',()=>{
+ assert.deepEqual(api.denseParts({cursor:'2026-10-01',round:2},null,source),[]);
+ const parts=api.denseParts({cursor:'2026-10-01',round:2},'publisher_platforms[0]',source);assert.deepEqual(parts.map(p=>p.platform),['facebook','instagram','messenger','audience_network']);
+ for(const piece of parts)assert.equal(new URL(api.pieceUrl(source,piece)).searchParams.get('publisher_platforms[0]'),piece.platform);
+ assert.deepEqual(api.denseParts(parts[0],'publisher_platforms[0]',source),[]);assert.deepEqual(api.denseParts(parts[0],'publisher_platforms[0]',source+'&publisher_platforms[0]=facebook'),[]);
 });
-test('split dates then one-day media then platforms, respect existing filters and terminate', () => {
-  const halves = api.split({ start: '2026-10-01', end: '2026-10-07' }, source);
-  assert.deepEqual(halves.map(p => [p.start, p.end]), [['2026-10-01', '2026-10-04'], ['2026-10-05', '2026-10-07']]);
-  const media = api.split({ start: '2026-10-20', end: '2026-10-20' }, source); assert.deepEqual(media.map(p => p.media), ['image', 'video']);
-  const platforms = api.split(media[1], source); assert.deepEqual(platforms.map(p => p.platform), ['facebook', 'instagram']);
-  assert.deepEqual(api.split(platforms[0], source), []); assert.equal(api.label(media[1]), '2026-10-20 · video');
-  assert.deepEqual(api.split(media[1], source + '&publisher_platforms[0]=facebook'), []);
-  const url = new URL(api.pieceUrl(source, platforms[0])); assert.equal(url.searchParams.get('media_type'), 'video'); assert.equal(url.searchParams.get('publisher_platforms[0]'), 'facebook');
-  assert.deepEqual(api.split({ start: '2026-10-20', end: '2026-10-20' }, source.replace('media_type=all', 'media_type=video')).map(p => p.platform), ['facebook', 'instagram']);
+test('explicit zero/no-results differs from unknown',()=>{
+ assert.equal(api.parseResults('~1.100 sonuç'),1100);assert.equal(api.parseResults('0 results'),0);assert.equal(api.parseResults('No results found'),0);assert.equal(api.parseResults('Loading…'),null);assert.equal(api.parseResults('Library ID: 1234567890\n2 results'),null);
 });
-test('TR/EN preflight estimates and zero/no-result text', () => {
-  assert.equal(api.parseResults('~6.300 sonuç'), 6300); assert.equal(api.parseResults('About 1,100 results'), 1100); assert.equal(api.parseResults('0 sonuç'), 0); assert.equal(api.parseResults('No ads found'), 0); assert.equal(api.parseResults('Results loading'), null);
+test('a zero-result round finishes once, without engine start or retry',async()=>{
+ const h=harness();await h.service.start(config);await h.loaded(0);assert.equal(h.store.chunkRun.phase,'done');assert.equal(h.store.chunkRun.done.length,1);assert.equal(h.requests.filter(m=>m.type==='META_SCAN_START').length,0);await h.next();assert.equal(h.tabs.size,0);assert.match(h.store.chunkRun.stopReason,/yeniden deneme yapılmadı/);assert(h.store.chunkEvents.some(e=>e.type==='Tur bitti'));
 });
-test('large preflight splits without invoking the scan engine, zero is skipped, foreground tabs only', async () => {
-  const h = harness(); await h.service.start({ ...config, unit: 'week', end: '2026-10-07' });
-  assert.equal([...h.tabs.values()][0].active, true); await h.loaded(1500);
-  assert.equal(h.requests.filter(r => r.type === 'META_SCAN_START').length, 0); assert.equal(h.store.chunkRun.queue.length, 2); assert.equal(h.removed.length, 1);
-  await h.next(); await h.loaded(0); assert.equal(h.store.chunkRun.done[0].status, 'empty'); assert.equal(h.requests.filter(r => r.type === 'META_SCAN_START').length, 0);
+test('unknown count scans; sorted dates checked before motor; wrong order pauses with a visible reason',async()=>{
+ const h=harness();await h.service.start(config);await h.loaded(null);assert.equal(h.store.chunkRun.active.phase,'scanning');assert.equal(h.store.chunkRun.active.total,null);
+ const bad=harness({dates:Array.from({length:20},(_,i)=>`2026-10-${String(i+1).padStart(2,'0')}`)});await bad.service.start(config);await bad.loaded();assert.equal(bad.store.chunkRun.running,false);assert.match(bad.store.chunkRun.stopReason,/En yeniler/);assert(!bad.requests.some(m=>m.type==='META_SCAN_START'));
 });
-test('shared pool deduplicates across chunks, batches <=25, raw count and overlap warning survive worker recreation', async () => {
-  const h = harness({ store: { telegramConfig: { enabled: true, token: 'private', chatId: '123' } } });
-  await h.service.start(config); await h.loaded(); h.advance(60000);
-  await h.send({ type: 'META_SCAN_APPEND', records: [ad('123456789012'), ad('123456789013')] });
-  await h.send({ type: 'META_SCAN_FINISHED', ads: [ad('123456789012'), ad('123456789013')], reason: 'meta-exhausted' });
-  assert.equal(h.store.chunkRun.uniqueCount, 2); assert.equal(h.store.chunkRun.rawCount, 2);
-  const restored = harness(h); await restored.next(); await restored.loaded(); restored.advance(180000);
-  await restored.send({ type: 'META_SCAN_FINISHED', ads: [ad('123456789013'), ad('123456789014')], reason: 'meta-exhausted' });
-  const run = h.store.chunkRun; assert.equal(run.uniqueCount, 3); assert.equal(run.rawCount, 4); assert.equal(run.phase, 'done'); assert(run.overlap); assert(run.done[1].slow);
-  const view = await restored.service.view({ chunkRun: run, ads: [], scan: {} }); assert.equal(view.ads.length, 3); assert.equal(new Set(view.ads.map(a => a.id)).size, 3);
-  assert.deepEqual(Object.keys(AdData.rows(view.ads)[0]), AdData.COLUMNS); assert.equal(AdData.rows(view.ads)[0]['Hook'], 'Diş tedavisinde yeni çözüm.');
-  assert(h.writes.filter(w => Object.keys(w).some(k => k.startsWith('chunk-pool:'))).every(w => Object.entries(w).filter(([k]) => k.startsWith('chunk-pool:')).every(([, records]) => records.length <= 25)));
-  await restored.service.report(); await restored.service.report(); assert.equal(restored.telegram.length, 1); assert(restored.telegram[0].includes('Toplam benzersiz reklam: 3')); assert(restored.telegram[0].includes('Taranan parça: 2')); assert(!restored.telegram[0].includes('private'));
+test('two foreground rounds share deduplicated pool and cursor, final duplicate-only round ends without retry',async()=>{
+ const h=harness();await h.service.start({...config,limit:2});await h.loaded(6300);assert.equal(h.store.chunkRun.active.phase,'scanning');
+ await h.send({type:'META_SCAN_APPEND',records:[ad('123456789010','2026-10-20'),ad('123456789011','2026-10-19')]});
+ await h.send({type:'META_SCAN_FINISHED',ads:[ad('123456789010','2026-10-20'),ad('123456789011','2026-10-19')],reason:'limit'});
+ assert.equal(h.store.chunkRun.cursor,'2026-10-19');assert.equal(h.store.chunkRun.uniqueCount,2);assert.equal(h.store.chunkRun.queue[0].cursor,'2026-10-19');
+ await h.next();await h.loaded(6000);const start=h.requests.filter(m=>m.type==='META_SCAN_START').at(-1);assert.equal(start.resumeAds.length,1);assert.equal(start.settings.maxAds,3);
+ await h.send({type:'META_SCAN_FINISHED',ads:[ad('123456789011','2026-10-19')],reason:'meta-exhausted'});assert.equal(h.store.chunkRun.phase,'done');assert.equal(h.store.chunkRun.uniqueCount,2);assert.equal(h.store.chunkRun.done.length,2);assert.equal(h.windows.size,1);
 });
-test('unknown estimate scans normally, limit retains results and then splits', async () => {
-  const h = harness(); await h.service.start({ ...config, unit: 'week', limit: 2 }); await h.loaded(null);
-  assert.equal(h.requests.filter(r => r.type === 'META_SCAN_START').length, 1); await h.send({ type: 'META_SCAN_FINISHED', ads: [ad('123456789012'), ad('123456789013')], reason: 'limit' });
-  assert.equal(h.store.chunkRun.uniqueCount, 2); assert.equal(h.store.chunkRun.queue.length, 2); assert.equal(h.store.chunkRun.splits.length, 1);
+test('same-day limit without a learned platform logs missing coverage and steps cursor back one day',async()=>{
+ const h=harness();await h.service.start({...config,limit:1});await h.loaded();await h.send({type:'META_SCAN_FINISHED',ads:[ad('123456789010')],reason:'limit'});await h.next();await h.loaded();await h.send({type:'META_SCAN_FINISHED',ads:[ad('123456789011')],reason:'limit'});
+ assert.equal(h.store.chunkRun.cursor,'2026-09-30');assert(h.store.chunkEvents.some(e=>/Yoğun gün/.test(e.type)));assert.equal(h.store.chunkRun.queue[0].cursor,'2026-09-30');
 });
-test('same piece opens at most twice; failures remain visible 20 seconds, log cause and advance',async()=>{
- const h=harness();await h.service.start(config);
- for(let attempt=0;attempt<2;attempt++){
-  await h.loaded(5);const tabId=h.store.chunkRun.active.tabId;
-  await h.send({type:'META_SCAN_FINISHED',ads:[ad('123456789012')],reason:'error'});
-  assert.equal(h.store.chunkRun.active.phase,'failure-hold');assert(h.tabs.has(tabId));assert.equal(h.store.badge,'!');
-  if(attempt===0){await h.service.pause();await h.service.resume();assert.equal(h.store.chunkRun.openCounts[api.key(h.store.chunkRun.active.piece)],1);assert(h.tabs.has(tabId));}
-  h.advance(19999);await h.service.closeFailed();assert(h.tabs.has(tabId));
-  h.advance(1);await h.service.closeFailed();assert(!h.tabs.has(tabId));
-  await h.next();
- }
- assert.equal(h.store.chunkRun.done[0].status,'failed');assert.equal(h.store.chunkRun.active.piece.start,'2026-10-02');
- assert.equal(h.store.chunkRun.openCounts[api.key({start:'2026-10-01',end:'2026-10-01'})],2);
- assert(h.store.chunkEvents.some(event=>event.type==='Yeniden deneme 1/2'));assert(h.store.chunkEvents.some(event=>event.reason.includes('Motor error')));
- await h.loaded(0);assert.equal(h.store.chunkRun.phase,'done');assert.equal(h.store.chunkRun.uniqueCount,1);
+test('same-day learned platform queue visits all four slices, including empty ones',async()=>{
+ const h=harness({store:{cursorPlatformParam:'publisher_platforms[0]'}});await h.service.start({...config,limit:1});await h.loaded();await h.send({type:'META_SCAN_FINISHED',ads:[ad('123456789010')],reason:'limit'});await h.next();await h.loaded();await h.send({type:'META_SCAN_FINISHED',ads:[ad('123456789011')],reason:'limit'});
+ assert.equal(h.store.chunkRun.queue.length,4);assert.deepEqual(h.store.chunkRun.queue.map(p=>p.platform),['facebook','instagram','messenger','audience_network']);
+ for(let i=0;i<4;i++){await h.next();await h.loaded(0);assert(h.store.chunkRun.running);}
+ assert.equal(h.store.chunkRun.cursor,'2026-09-30');assert.equal(h.store.chunkRun.queue.length,1);assert(!h.store.chunkRun.queue[0].platform);
 });
-test('approximate Meta count is not a completion target and does not cause repeated reopening',async()=>{
- const h=harness();await h.service.start(config);await h.loaded(500);await h.send({type:'META_SCAN_FINISHED',ads:[ad('123456789012')],reason:'meta-exhausted'});
- assert.equal(h.store.chunkRun.done[0].status,'done');assert.equal(h.store.chunkRun.queue.length,1);assert(h.store.chunkEvents.some(event=>event.type==='Parça bitti'&&event.reason.includes('Meta: 500')));
+test('target counts only fresh IDs, duplicates never consume quota and every saved batch is <=25',async()=>{
+ const h=harness();await h.service.start({...config,limit:800,target:2});await h.loaded();await h.send({type:'META_SCAN_APPEND',records:[ad('123456789010'),ad('123456789010')]});assert.equal(h.store.chunkRun.active.newCount,1);await h.send({type:'META_SCAN_APPEND',records:[ad('123456789011')]});await h.send({type:'META_SCAN_FINISHED',ads:[ad('123456789010'),ad('123456789011')],reason:'stopped'});
+ assert.equal(h.store.chunkRun.phase,'done');assert.match(h.store.chunkRun.stopReason,/Hedef/);const state=await h.service.view({chunkRun:h.store.chunkRun,scan:{}});assert.equal(state.ads.length,2);assert(h.writes.flatMap(w=>Object.entries(w).filter(([k])=>k.startsWith('chunk-pool:')).map(([,v])=>v)).every(v=>v.length<=25));
 });
-test('pause checkpoints unfinished piece, resume does not repeat completed pieces or add duplicate IDs', async () => {
-  const h = harness(); await h.service.start(config); await h.loaded(1); await h.send({ type: 'META_SCAN_FINISHED', ads: [ad('123456789012')], reason: 'meta-exhausted' }); await h.next(); await h.loaded(1);
-  await h.send({ type: 'META_SCAN_APPEND', records: [ad('123456789013')] }); await h.service.pause();
-  await assert.rejects(()=>h.service.resume(),/Son reklam paketi/);
-  await assert.rejects(()=>h.service.hide(),/Son reklam paketi/);
-  await h.send({ type: 'META_SCAN_FINISHED', ads: [ad('123456789013')], reason: 'stopped' });
-  assert.equal(h.store.chunkRun.done.length, 1); assert.equal(h.store.chunkRun.queue[0].start, '2026-10-02');
-  const restored = harness(h); await restored.service.resume(); await restored.loaded(1); await restored.send({ type: 'META_SCAN_FINISHED', ads: [ad('123456789013')], reason: 'meta-exhausted' });
-  assert.equal(h.store.chunkRun.phase, 'done'); assert.equal(h.store.chunkRun.done.length, 2); assert.equal(h.store.chunkRun.uniqueCount, 2); assert.equal(h.store.chunkRun.rawCount, 2);
+test('append mode merges normal and previous pools; failure never erases saved ads',async()=>{
+ const h=harness({store:{ads:[ad('123456789010')]}});await h.service.start({...config,addPool:true});assert.equal(h.store.chunkRun.uniqueCount,1);await h.loaded();await h.send({type:'META_SCAN_FINISHED',ads:[ad('123456789010'),ad('123456789011')],reason:'error'});assert.equal(h.store.chunkRun.running,false);assert.equal(h.store.chunkRun.uniqueCount,2);assert.match(h.store.chunkRun.stopReason,/Motor durdu/);
 });
-test('worker restoration keeps a live scan in its window; a closed window pauses with explicit reason',async()=>{
- const h=harness();await h.service.start(config);await h.loaded(2);const windowId=h.store.chunkRun.windowId,tabId=h.store.chunkRun.active.tabId;
- await h.service.recover();assert(h.store.chunkRun.running);assert.equal(h.store.chunkRun.active.tabId,tabId);assert.equal(h.windows.size,1);
- h.windows.delete(windowId);await h.service.recover();assert.equal(h.store.chunkRun.running,false);assert.equal(h.store.chunkRun.stopReason,'durduruldu: pencere kapatıldı');assert.equal(h.store.chunkRun.queue.length,2);
+test('network load failures allow at most two opens and retain each failed tab for 20s',async()=>{
+ const h=harness();await h.service.start(config);let active=h.store.chunkRun.active;h.tabs.get(active.tabId).status='complete';h.probes.push({loaded:false});await h.service.loaded(active.tabId);assert.equal(h.store.chunkRun.active.phase,'failure-hold');assert.equal(h.removed.length,0);await h.service.closeFailed();assert.equal(h.removed.length,0);
+ await h.next();active=h.store.chunkRun.active;h.tabs.get(active.tabId).status='complete';h.probes.push({loaded:false});await h.service.loaded(active.tabId);await h.next();assert.equal(h.store.chunkRun.phase,'done');assert.equal(h.requests.filter(r=>r.func?.name==='probePage').length,2);assert.equal(h.store.chunkRun.done[0].status,'failed');
 });
-test('wrong frame, sender URL and session cannot write pool records', async () => {
-  const h = harness(); await h.service.start(config); await h.loaded(); const active = h.store.chunkRun.active;
-  for (const sender of [{ tab: { id: active.tabId }, frameId: 1, url: source }, { tab: { id: active.tabId }, frameId: 0, url: 'https://evil.example/' }, { tab: { id: 999 }, frameId: 0, url: source }]) await assert.rejects(() => h.service.content({ type: 'META_SCAN_APPEND', sessionId: active.sessionId, records: [ad('123456789012')] }, sender), /Geçersiz/);
-  assert.equal(h.store.chunkRun.uniqueCount, 0);
+test('PING retries, injection includes lightener, and readiness failure is never reopened automatically',async()=>{
+ const h=harness();h.setPing(false);h.setInjectionReady(true);await h.service.start(config);await h.loaded();assert.equal(h.sleeps.length,4);assert(h.requests.some(r=>r.files?.includes('page-lightener.js')));assert.equal(h.store.chunkRun.active.phase,'scanning');
+ const bad=harness();bad.setPing(false);await bad.service.start(config);await bad.loaded();assert.equal(bad.store.chunkRun.active.phase,'failure-hold');await bad.next();assert.equal(bad.store.chunkRun.phase,'done');assert.equal(bad.store.chunkRun.done[0].status,'failed');
 });
-test('worker integration: GET_STATE exposes pooled data, normal mode unaltered, no per-part Telegram/history', async () => {
-  const h = harness({}, true);
-  assert((await h.command({ type: 'START_CHUNKS', config })).ok); await h.loaded(1);
-  const active = h.store.chunkRun.active;
-  const send = message => new Promise(resolve => h.events.message.at(-1)({ sessionId: active.sessionId, scrollCount: 0, ...message }, { id: 'test', tab: { id: active.tabId }, frameId: 0, url: h.tabs.get(active.tabId).url }, resolve));
-  assert((await send({ type: 'META_SCAN_APPEND', records: [ad('123456789012')] })).ok);
-  let result = await h.command({ type: 'GET_STATE' }); assert.equal(result.state.ads.length, 1); assert.equal(h.sessionStore.scanProgress.ads, 1); assert.equal(h.sessionStore.scanProgress.status, 'scanning');
-  assert((await send({ type: 'META_SCAN_FINISHED', ads: [ad('123456789012')], reason: 'meta-exhausted' })).ok);
-  assert.equal(h.store.history?.length || 0, 0); assert.equal(h.store.telegramOutbox?.length || 0, 0);
-  assert((await h.command({ type: 'STOP_SCAN' })).ok); result = await h.command({ type: 'GET_STATE' }); assert.equal(result.state.chunkRun.running, false); assert.equal(result.state.ads.length, 1);
-  assert((await h.command({ type: 'CLEAR_RESULTS' })).ok); result = await h.command({ type: 'GET_STATE' }); assert.equal(result.state.chunkRun, null); assert.equal(result.state.ads.length, 0);
+test('pause and worker restart preserve cursor, pool, queue and explicit resume',async()=>{
+ const shared={};const h=harness(shared);await h.service.start(config);await h.loaded();await h.send({type:'META_SCAN_APPEND',records:[ad('123456789010')]});await h.service.pause();await h.send({type:'META_SCAN_FINISHED',ads:[ad('123456789010')],reason:'stopped'});assert.equal(h.store.chunkRun.phase,'paused');
+ const r=harness({store:h.store,tabs:h.tabs,windows:h.windows});await r.service.resume();await r.loaded();assert.equal(r.store.chunkRun.uniqueCount,1);assert(r.requests.find(m=>m.type==='META_SCAN_START').resumeAds.some(a=>a.id==='123456789010'));
 });
-test('unsplittable one-day platform leaves are failed, do not loop or silently claim full coverage', async () => {
-  const h = harness(); await h.service.start({ ...config, end: config.start, limit: 1 });
-  for (let i = 0; h.store.chunkRun.running && i < 20; i++) { await h.loaded(100); if (h.store.chunkRun.running) await h.next(); }
-  assert.equal(h.store.chunkRun.phase, 'done'); assert.equal(h.store.chunkRun.done.length, 4); assert(h.store.chunkRun.done.every(item => item.status === 'failed'));
-  assert.equal(h.store.chunkRun.splits.length, 3); assert.equal(h.requests.filter(r => r.type === 'META_SCAN_START').length, 0);
+test('window closure records reason, unauthorized messages rejected and event log bounded',async()=>{
+ const h=harness();await h.service.start(config);await h.loaded();await assert.rejects(()=>h.service.content({type:'META_SCAN_APPEND',sessionId:'bad',records:[]},{tab:{id:999},frameId:0,url:source}));for(let i=0;i<110;i++)await h.service.log(await h.service.read(),'test',String(i));assert.equal(h.store.chunkEvents.length,100);await h.service.windowClosed(h.store.chunkRun.windowId);assert.equal(h.store.chunkRun.running,false);assert.match(h.store.chunkRun.stopReason,/pencere kapatıldı/);
 });
-test('start needs no existing date fields and reads the explicit source tab when supplied', async () => {
-  const h=harness({url:'https://www.facebook.com/ads/library/?q=implant&sort_data[mode]=total_impressions'});
-  await h.service.start(config);assert.equal(new URL([...h.tabs.values()][0].url).searchParams.get('start_date[min]'),config.start);
-  assert.equal(h.store.chunkRun.firstUrl,[...h.tabs.values()][0].url);
-  const other=harness();other.tabs.set(77,{id:77,url:'https://www.facebook.com/ads/library/?q=correct-window&country=TR'});await other.service.start(config,77);
-  assert.equal(new URL([...other.tabs.values()].at(-1).url).searchParams.get('q'),'correct-window');
-  const bad=harness({url:'https://example.org/',store:{ads:[ad('123456789012')]}});await assert.rejects(()=>bad.service.start(config),/Önce Meta Reklam Kütüphanesi sonuç sayfasını aç, sonra başlat/);assert.equal(bad.store.ads.length,1);
-  await assert.rejects(()=>bad.service.start(config,999),/sekme bulunamadı/);
+test('single final Telegram summary remains durable and pool export columns stay unchanged',async()=>{
+ const h=harness({store:{telegramConfig:{enabled:true}}});await h.service.start(config);await h.loaded(0);h.advance(1000);await h.service.report();await h.service.report();assert.equal(h.telegram.length,1);assert.match(h.telegram[0],/Tarih imleciyle tarama tamamlandı/);
 });
-test('display order is saved independently of extraction order and retained with the first piece',async()=>{
-  const h=harness();await h.service.start(config);await h.loaded(2);
-  h.setOrder(['123456789013','123456789012']);await h.send({type:'META_SCAN_APPEND',records:[ad('123456789012'),ad('123456789013')]});
-  let view=await h.service.view({chunkRun:h.store.chunkRun,ads:[],scan:{}});assert.equal(view.ads.find(ad=>ad.id==='123456789012').chunkRank,2);assert.equal(view.ads[0].chunkPiece,'2026-10-01');
-  h.setOrder(['123456789014','123456789013','123456789012']);await h.send({type:'META_SCAN_FINISHED',ads:[ad('123456789012'),ad('123456789013'),ad('123456789014')],reason:'meta-exhausted'});
-  view=await h.service.view({chunkRun:h.store.chunkRun,ads:[],scan:{}});assert.equal(view.ads.find(ad=>ad.id==='123456789012').chunkRank,3);
+test('exact 20-card ordering threshold accepts 15 and rejects 14 descending/equal checks',()=>{
+ const make=rises=>Array.from({length:20},(_,i)=>`2026-10-${String(Math.min(i,rises)+1).padStart(2,'0')}`);
+ assert(api.descending(make(5)));assert(!api.descending(make(6)));
 });
-test('pool writes are append-only 25-record batches and a failed batch preserves acknowledged data for resume', async () => {
-  const h = harness(); await h.service.start(config); await h.loaded(100);
-  const first = Array.from({ length: 25 }, (_, i) => ad('1234567890' + String(i).padStart(3, '0')));
-  await h.send({ type: 'META_SCAN_APPEND', records: first }); const keys = [...h.store.chunkRun.poolKeys]; h.failPoolOnce();
-  await assert.rejects(() => h.send({ type: 'META_SCAN_APPEND', records: [ad('1234567890999')] }), /kaydedilemedi/);
-  assert.equal(h.store.chunkRun.running, false); assert.equal(h.store.chunkRun.uniqueCount, 25); assert.deepEqual(h.store.chunkRun.poolKeys, keys);
-  const data = await h.service.view({ chunkRun: h.store.chunkRun, ads: [], scan: {} }); assert.equal(data.ads.length, 25);
-  assert(h.writes.filter(w => Object.keys(w).some(k => k.startsWith('chunk-pool:'))).every(w => !('ads' in w)));
-  await h.service.resume(); assert.equal(h.store.chunkRun.active.piece.start, config.start);
+test('append pool includes normal incremental batches and keeps ID text deduplicated',async()=>{
+ const h=harness({store:{ads:[ad('123456789010')],scanBatches:{keys:['scan-batch:one']},'scan-batch:one':[ad('123456789010'),ad('123456789011')]}});await h.service.start(config);assert.equal(h.store.chunkRun.uniqueCount,2);assert.equal(h.store['scan-batch:one'],undefined);const state=await h.service.view({chunkRun:h.store.chunkRun,scan:{}});assert.deepEqual(state.ads.map(a=>a.id),['123456789010','123456789011']);
 });
-test('loading timeout reaches the two-opening limit then records failure and advances', async () => {
-  const h = harness(); await h.service.start(config);
-  for (let i = 0; i < 2; i++) {
-    h.advance(45001); for (const handler of h.events.alarm) handler({ name: 'chunk-timeout' }); await h.idle(); await h.next();
-  }
-  assert.equal(h.store.chunkRun.done[0].status, 'failed'); assert.equal(h.store.chunkRun.active.piece.start, '2026-10-02'); assert.equal(h.requests.filter(r => r.type === 'META_SCAN_START').length, 0);
+test('saved pool survives storage quota failure and controller failures are never auto-retried',async()=>{
+ const h=harness();await h.service.start(config);await h.loaded();await h.send({type:'META_SCAN_APPEND',records:[ad('123456789010')]});h.failPoolOnce();await assert.rejects(()=>h.send({type:'META_SCAN_APPEND',records:[ad('123456789011')]}),/kaydedilemedi/);assert.equal(h.store.chunkRun.running,false);assert.equal(h.store.chunkRun.uniqueCount,1);assert.equal(h.store.chunkRun.active.failure.retry,false);const state=await h.service.view({chunkRun:h.store.chunkRun,scan:{}});assert.equal(state.ads[0].id,'123456789010');
 });
-test('with the manager loaded, default START_SCAN retains normal ownership, history and export schema', async () => {
-  const h = harness({}, true);
-  const response = await h.command({ type: 'START_SCAN', settings: { autoScroll: false, speed: 'medium', maxAds: 100 } }); assert(response.ok);
-  assert.equal(h.store.chunkRun, undefined); assert.equal(h.tabs.size, 0); assert.equal(h.store.scan.running, true);
-  const state = await h.command({ type: 'GET_STATE' }); assert.equal(state.state.scan.running, true);
-  const sessionId = h.store.scan.sessionId;
-  const finished = await new Promise(resolve => h.events.message.at(-1)({ type: 'META_SCAN_FINISHED', sessionId, scrollCount: 0, ads: [ad('123456789012')], reason: 'visible-complete' }, { id: 'test', tab: { id: 7 }, frameId: 0, url: source }, resolve));
-  assert(finished.ok); assert.equal(h.store.history.length, 1); assert.equal(h.store.ads.length, 1); assert.deepEqual(Object.keys(AdData.rows(h.store.ads)[0]), AdData.COLUMNS);
+test('running worker recovery reattaches without opening another tab or starting motor twice',async()=>{
+ const h=harness();await h.service.start(config);await h.loaded();const r=harness({store:h.store,tabs:h.tabs,windows:h.windows});await r.service.recover();assert.equal(r.store.chunkRun.active.phase,'scanning');assert(!r.requests.some(m=>m.type==='META_SCAN_START'));assert.equal(r.tabs.size,1);
 });
-test('PING retries five times at one-second intervals, injects the untouched engine and bridge, then confirms readiness',async()=>{
- const h=harness();await h.service.start(config);h.setPing(false);h.setInjectionReady(true);await h.loaded(null);
- assert.deepEqual(h.sleeps,[1000,1000,1000,1000]);assert.equal(h.requests.filter(r=>r.type==='PING').length,6);
- assert(h.requests.some(r=>r.files?.includes('chunk-bridge.js')&&r.files.includes('content.js')));
- assert.equal(h.store.chunkRun.active.phase,'scanning');assert(h.store.chunkEvents.some(event=>event.type==='Content script enjekte ediliyor'));
+test('pool clear resets only its stored pool and progress; active jobs cannot be cleared',async()=>{
+ const h=harness();await h.service.start(config);await h.loaded();await assert.rejects(()=>h.service.clear(),/Önce/);await h.send({type:'META_SCAN_FINISHED',ads:[ad('123456789010')],reason:'error'});await h.service.clear();assert.equal(h.store.chunkRun,null);assert.equal(h.store.scrollCount,0);assert.equal(h.progress.at(-1).ads,0);assert(!Object.keys(h.store).some(key=>key.startsWith('chunk-pool:')));
 });
-test('missing content readiness has an explicit log and holds the failed tab without starting scanning',async()=>{
- const h=harness();await h.service.start(config);h.setPing(false);await h.loaded(null);
- assert.equal(h.store.chunkRun.active.phase,'failure-hold');assert.equal(h.requests.filter(r=>r.type==='META_SCAN_START').length,0);
- assert(h.store.chunkEvents.some(event=>event.type==='Parça başarısız'&&event.reason.includes('PING')));assert(h.tabs.has(h.store.chunkRun.active.tabId));
+test('legacy date-window jobs are paused with saved pool accessible for append migration',async()=>{
+ const h=harness({store:{chunkRun:{id:'legacy',running:true,phase:'running',visible:true,queue:[],done:[],active:null,poolKeys:['old-pool'],uniqueCount:1,scrollCount:0},'old-pool':[ad('123456789010')]}});const prior=await h.service.read();assert.equal(prior.running,false);assert.match(prior.stopReason,/Eski tarih pencereli/);await h.service.start({...config,addPool:true});assert.equal(h.store.chunkRun.mode,'cursor');assert.equal(h.store.chunkRun.uniqueCount,1);assert.equal(h.store['old-pool'].length,1);assert(h.store.chunkRun.poolKeys.includes('old-pool'));
 });
-test('journal caps at 100 newest events with time and piece label; badge formats thousands',async()=>{
- const h=harness();await h.service.start(config);const run=h.store.chunkRun;
- for(let i=0;i<105;i++)await h.service.log(run,'Test olayı',String(i));
- assert.equal(h.store.chunkEvents.length,100);assert.equal(h.store.chunkEvents[0].reason,'104');assert.equal(h.store.chunkEvents.at(-1).reason,'5');assert(h.store.chunkEvents.every(event=>event.at&&event.piece==='2026-10-01'));
- run.uniqueCount=2140;await h.service.progress(run);assert.equal(h.store.badge,'2.1k');
+test('unreadable dates do not silently shrink a twenty-card ordering sample',()=>{
+ assert(api.descending([...Array(15).fill('2026-10-01'),...Array(5).fill('')]));assert(!api.descending([...Array(14).fill('2026-10-01'),...Array(6).fill('')]));
 });
-test('one normal scan window is reused for every piece, and the 30-second heartbeat survives worker reattachment',async()=>{
- const h=harness();await h.service.start(config);const windowId=h.store.chunkRun.windowId;
- assert.equal(h.windows.get(windowId).type,'normal');assert.equal(h.windows.get(windowId).focused,true);assert.equal(h.alarms.get('chunk-heartbeat').periodInMinutes,.5);
- await h.loaded(1);await h.send({type:'META_SCAN_FINISHED',ads:[ad('123456789012')],reason:'meta-exhausted'});await h.next();
- assert.equal(h.windows.size,1);assert.equal(h.store.chunkRun.windowId,windowId);assert.equal(h.tabs.get(h.store.chunkRun.active.tabId).windowId,windowId);
- await h.loaded(1);await h.service.recover();assert.equal(h.store.chunkRun.active.phase,'scanning');assert.equal(h.store.chunkRun.openCounts[api.key(h.store.chunkRun.active.piece)],1);
-});
-test('explicit duplicate queued piece cannot bypass the persistent two-opening ceiling',async()=>{
- const h=harness();await h.service.start(config);const piece=h.store.chunkRun.active.piece;await h.loaded(1);await h.send({type:'META_SCAN_FINISHED',ads:[ad('123456789012')],reason:'meta-exhausted'});
- const run=h.store.chunkRun;run.done=[];run.openCounts[api.key(piece)]=2;run.queue=[piece];run.nextAt=0;
- const count=h.requests.filter(r=>r.type==='META_SCAN_START').length;await h.service.next();assert.equal(h.store.chunkRun.active,null);assert.equal(h.store.chunkRun.done[0].status,'failed');assert.equal(h.requests.filter(r=>r.type==='META_SCAN_START').length,count);
-});
-function probeHarness(){
- let time=0,callback,load,finished=false,result;const timers=new Map();let timerId=0;
- const document={readyState:'complete',body:{innerText:'Yükleniyor…'},documentElement:{}};
- const context={document,location:{href:source},Date:{now:()=>time},MutationObserver:class{constructor(fn){callback=fn}observe(){}disconnect(){}},setTimeout(fn,ms){const id=++timerId;timers.set(id,{fn,due:time+ms});return id},clearTimeout(id){timers.delete(id)},addEventListener(type,fn){load=fn},removeEventListener(){}};
- const promise=vm.runInNewContext('('+api.probePage.toString()+')()',context).then(value=>{finished=true;result=value;});
- return {document,promise,get finished(){return finished},get result(){return result},async mutate(){callback();await Promise.resolve();},async tick(ms){time+=ms;for(const [id,timer]of [...timers])if(timer.due<=time){timers.delete(id);timer.fn();}await Promise.resolve();},async loaded(){document.readyState='complete';load();await Promise.resolve();}};
-}
-test('result probe waits at least ten seconds for unknown, returns null rather than zero, and stops by 25 seconds',async()=>{
- const h=probeHarness();await h.tick(9999);assert(!h.finished);await h.tick(1);await h.promise;assert.equal(h.result.total,null);assert.equal(h.result.loaded,true);
- const late=probeHarness();late.document.readyState='loading';await late.tick(10000);assert(!late.finished);await late.tick(15000);await late.promise;assert.equal(late.result.loaded,false);assert.equal(late.result.total,null);
-});
-test('result text is read only after full load; explicit zero and approximate positive totals are distinct',async()=>{
- const h=probeHarness();h.document.readyState='loading';h.document.body.innerText='0 sonuç';await h.mutate();assert(!h.finished);await h.loaded();await h.promise;assert.equal(h.result.total,0);
- const positive=probeHarness();positive.document.body.innerText='~1.100 sonuç\nLibrary ID: 123456789012\n0 sonuç';await positive.mutate();await positive.promise;assert.equal(positive.result.total,1100);
- const empty=probeHarness();empty.document.body.innerText='Sonuç bulunamadı';await empty.mutate();await empty.promise;assert.equal(empty.result.total,0);
-});
-test('separate PING bridge reports collector readiness, authenticates the sender and installs only once',()=>{
- const listeners=[],context={chrome:{runtime:{id:'test',onMessage:{addListener(fn){listeners.push(fn)}}}}};
- const source=fs.readFileSync(require('node:path').join(__dirname,'../chunk-bridge.js'),'utf8');vm.runInNewContext(source,context);vm.runInNewContext(source,context);assert.equal(listeners.length,1);
- let reply;listeners[0]({type:'PING'},{id:'test'},value=>reply=value);assert.equal(reply.ready,false);context.__metaAdCollector={version:'0.9.2'};listeners[0]({type:'PING'},{id:'test'},value=>reply=value);assert.equal(reply.ready,true);reply=null;listeners[0]({type:'PING'},{id:'other'},value=>reply=value);assert.equal(reply,null);
+test('appending a second run preserves original export rank and piece of existing ads',async()=>{
+ const record={...ad('123456789010'),chunkRank:7,chunkPiece:'Tur 1 · tarihsiz'};
+ const h=harness({store:{chunkRun:{id:'previous',mode:'cursor',phase:'done',running:false,visible:true,active:null,queue:[],done:[],poolKeys:['chunk-pool:previous:0'],uniqueCount:1,scrollCount:0},'chunk-pool:previous:0':[record]}});await h.service.start({...config,addPool:true});await h.loaded();h.setOrder([record.id]);await h.send({type:'META_SCAN_FINISHED',ads:[record],reason:'meta-exhausted'});const state=await h.service.view({chunkRun:h.store.chunkRun,scan:{}});assert.equal(state.ads[0].chunkRank,7);assert.equal(state.ads[0].chunkPiece,'Tur 1 · tarihsiz');
 });

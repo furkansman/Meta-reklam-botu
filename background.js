@@ -184,6 +184,7 @@ async function handle(message, sender) {
   if (sender.url !== chrome.runtime.getURL('popup.html')) throw new Error('Bilinmeyen mesaj kaynağı.');
   if(competitorService&&['ADD_COMPETITOR','REMOVE_COMPETITOR','WATCH_START','WATCH_SETTINGS'].includes(type))return competitorService.command(message);
   if(chunkService && type==='START_CHUNKS')return chunkService.start(message.config,message.sourceTabId);
+  if(chunkService && type==='CLEAR_CURSOR_POOL'){await chunkService.clear();return {ok:true};}
   if(chunkService && type==='RESUME_CHUNKS')return chunkService.resume();
   if(chunkService && type==='STOP_SCAN' && state.chunkRun?.running)return chunkService.pause();
   switch (type) {
