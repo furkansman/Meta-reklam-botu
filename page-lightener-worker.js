@@ -30,7 +30,7 @@
     if(entry)await removeRule(entry.ruleId);
     const settings=state.pageLightenerSettings||{};
     state.lightenerSessions[tabId]={sessionId:message.sessionId,kind,ruleId:null,stopped:false};await chrome.storage.local.set({lightenerSessions:state.lightenerSessions});
-    return {ok:true,bypass:kind==='watch',enabled:settings.enabled!==false,blockMedia:kind!=='watch'&&Boolean(settings.blockMedia)&&Boolean(dnr),warning:settings.blockMedia&&!dnr?'Medya engelleme API’si kullanılamıyor.':''};
+    return {ok:true,bypass:kind==='watch',enabled:settings.enabled!==false,safetyOff:Boolean(settings.safetyOff),blockMedia:kind!=='watch'&&Boolean(settings.blockMedia)&&Boolean(dnr),warning:settings.blockMedia&&!dnr?'Medya engelleme API’si kullanılamıyor.':''};
    }
    if(message.type==='LIGHTENER_BLOCK'){
     if(!entry||entry.stopped||kind==='watch')return {ok:false,blocked:false,error:'Medya engelleme oturumu kapalı.'};

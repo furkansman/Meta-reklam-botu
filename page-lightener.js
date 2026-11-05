@@ -6,6 +6,15 @@
     const now=options.now||(()=>performance.now()),send=options.send|| (message=>chrome.runtime.sendMessage(message));
     const entries=[],byId=new Map(),snapshots=new WeakMap(),lightened=new WeakSet(),attempted=new WeakSet(),nodeIds=new WeakMap(),history=[];
     let enabled=false,blockingWanted=false,blocked=false,active=false,bypass=false,stopped=false,changed=false,baseline=null,after=[],scrollStart=null,readySamples=[],pending=0,total=0,lightenedCount=0,errors=0,missingMedia=0,speed=0,seconds=0,speedAt=now(),nextSpeed=50,nextLog=200,warning='';
+    let safetyOff=false,configured=false,closures=0,retryAt=null,permanent=false,readStreak=0,readWindow=[],lastRead=new Map();
+    const cohorts={on:{cards:0,missing:0},off:{cards:0,missing:0}};
+    function readResult(id,ok){if(bypass||lastRead.get(id)===ok)return;lastRead.set(id,ok);readStreak=ok?0:readStreak+1;readWindow.push(ok);if(readWindow.length>100)readWindow.shift();}
+    async function dataGuard(reason){
+      warning=(safetyOff?'Emniyet kapalı (test): ': 'Hafifletme kapatıldı: ')+reason;
+      if(!safetyOff&&(enabled||blocked)){closures++;enabled=false;blockingWanted=false;if(blocked){try{await send({type:'LIGHTENER_BLOCK',sessionId:options.sessionId,enabled:false});blocked=false;}catch{errors++;}}
+        permanent=closures>=3;retryAt=permanent?null:total+150;warning+=permanent?' · 3. kapanma; kalıcı kapatıldı.':' · 150 reklam sonra yeniden denenecek.';
+      }await publish(true);
+    }
     const ref=node=>typeof WeakRef==='function'?new WeakRef(node):{deref:()=>node};
     const capture=(node,names)=>({node:ref(node),attrs:Object.fromEntries(names.map(name=>[name,node.getAttribute(name)]))});
     function restore(snapshot,media=true){
@@ -76,22 +85,28 @@
     }
     function snapshot(){
       const used=typeof performance!=='undefined'?performance.memory?.usedJSHeapSize:null;
-      return {enabled,blocked,lightened:lightenedCount,errors,missingMedia,speed,last50Seconds:seconds,memoryMB:Number.isFinite(used)?Math.round(used/1048576*10)/10:null,warning:warning||((enabled||blockingWanted)&&readySamples.length<3?'İlk 3 kaydırma ölçülüyor.':''),total};
+      return {enabled,blocked,safetyOff,closures,retryAt,permanent,cohorts:structuredClone(cohorts),lightened:lightenedCount,errors,missingMedia,speed,last50Seconds:seconds,memoryMB:Number.isFinite(used)?Math.round(used/1048576*10)/10:null,warning:warning||((enabled||blockingWanted)&&readySamples.length<3?'İlk 3 kaydırma ölçülüyor.':''),total};
     }
     async function publish(log=false){if(bypass||!active)return;try{const response=await send({type:'LIGHTENER_REPORT',sessionId:options.sessionId,metrics:snapshot(),log});if(!response?.ok)throw new Error('Hafifletme teşhisi kaydedilemedi.');}catch{errors++;}}
     async function start(){
       try{
         const response=await send({type:'LIGHTENER_START',sessionId:options.sessionId});
         if(!response?.ok)throw new Error(response?.error||'Hafifletme ayarları okunamadı.');
-        bypass=Boolean(response.bypass);enabled=!bypass&&response.enabled!==false;blockingWanted=!bypass&&Boolean(response.blockMedia);active=true;warning=response.warning||'';
+        bypass=Boolean(response.bypass);enabled=!bypass&&response.enabled!==false;blockingWanted=!bypass&&Boolean(response.blockMedia);configured=enabled;safetyOff=Boolean(response.safetyOff);active=true;warning=response.warning||'';
       }catch{errors++;enabled=false;blockingWanted=false;warning='Hafifletme başlatılamadı; tarama normal sürüyor.';}
       await publish();return {legacy:bypass||(!enabled&&!blockingWanted)};
     }
     async function committed(records){
       if(bypass)return;
       let added=0;
-      for(const ad of records){const entry=byId.get(ad.id);if(!entry||entry.saved)continue;entry.saved=true;added++;if(!ad.mediaUrl)missingMedia++;}
+      for(const ad of records){const entry=byId.get(ad.id);if(!entry||entry.saved)continue;entry.saved=true;added++;const cohort=cohorts[enabled&&changed?'on':'off'];cohort.cards++;if(!ad.mediaUrl){missingMedia++;cohort.missing++;}}
       total+=added;pending+=added;
+      if(retryAt!==null&&total>=retryAt&&!permanent){enabled=configured;retryAt=null;readStreak=0;readWindow=[];cohorts.on={cards:0,missing:0};warning='Hafifletme yeniden deneniyor ('+closures+'/3).';await publish(true);}
+      if(enabled||blocked){
+        if(readStreak>=10)await dataGuard('Ardışık 10 kartta okuma hatası');
+        else if(readWindow.length===100&&readWindow.includes(false))await dataGuard('Son 100 kartta okuma hatası');
+        else if(cohorts.off.cards&&cohorts.on.cards>=50&&cohorts.on.missing/cohorts.on.cards-cohorts.off.missing/cohorts.off.cards>.02)await dataGuard('Medya URL boşluk oranı kapalı ölçümden 2 yüzde puan fazla');
+      }
       const groups=Math.floor(pending/BATCH);
       if(groups&&(!enabled||readySamples.length>=3)){pending-=groups*BATCH;runBatch(groups*BATCH);}
       const tick=now();let report=false,log=false;
@@ -101,16 +116,13 @@
     }
     function beforeScroll(count){scrollStart={at:now(),count};}
     async function afterScroll(count){
+      if(!bypass&&(enabled||blocked)){if(readStreak>=10)await dataGuard('Ardışık 10 kartta okuma hatası');else if(readWindow.length===100&&readWindow.includes(false))await dataGuard('Son 100 kartta okuma hatası');}
       if(!scrollStart||bypass)return;
       const rate=Math.max(0,count-scrollStart.count)/Math.max(.001,(now()-scrollStart.at)/1000);scrollStart=null;
       if(changed||blocked){
         after.push(rate);if(after.length>3)after.shift();
-        if(after.length===3&&baseline!==null&&after.reduce((a,b)=>a+b,0)/3<baseline*.3){
-          enabled=false;blockingWanted=false;const hadBlocked=blocked;warning='Hafifletme kapatıldı: yükleme düştü';
-          try{if(hadBlocked){const result=await send({type:'LIGHTENER_BLOCK',sessionId:options.sessionId,enabled:false});if(!result?.ok)throw new Error('Kural kaldırılamadı.');}blocked=false;}catch{errors++;warning+=' · Medya kuralı temizlenemedi; yeniden denenecek.';}
-          // Do not reload hundreds of saved creatives when the guard fires.
-          // Existing fixed-height cards stay light; only future interventions stop.
-          changed=false;baseline=null;after=[];await publish(true);return;
+        if((enabled||blocked)&&after.length===3&&baseline!==null&&after.reduce((a,b)=>a+b,0)/3<baseline*.3){
+          warning='Hız düştü: '+Math.round(after.reduce((a,b)=>a+b,0)/3*60)+' reklam/dk';await publish(true);
         }
       }else{readySamples.push(rate);if(readySamples.length>3)readySamples.shift();}
       if(blockingWanted&&!blocked&&arm()){
@@ -120,7 +132,7 @@
     }
     async function stop(){if(stopped)return;stopped=true;try{const response=await send({type:'LIGHTENER_STOP',sessionId:options.sessionId});if(!response?.ok)throw new Error('Kural temizlenemedi.');blocked=false;}catch{errors++;}}
     async function finish(){await stop();await publish();}
-    return {start,track,committed,beforeScroll,afterScroll,prepare,restoreAll,finish,stop,snapshot,lightenCard,runBatch};
+    return {start,track,committed,beforeScroll,afterScroll,prepare,restoreAll,finish,stop,snapshot,lightenCard,runBatch,readResult};
   }
   const api={create,KEEP,BATCH};root.PageLightener=api;if(typeof module!=='undefined'&&module.exports)module.exports=api;
 })(globalThis);

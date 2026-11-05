@@ -11,9 +11,9 @@ class Element{
  insertBefore(node){node.parentNode=this;this.sources.push(node);}
 }
 const id=n=>'1234567890'+String(n).padStart(4,'0');
-function harness({enabled=true,blockMedia=false}={}){
+function harness({enabled=true,blockMedia=false,safetyOff=false}={}){
  let time=0;const messages=[];
- const controller=api.create({sessionId:'scan',now:()=>time,viewportHeight:()=>600,send:async message=>{messages.push(structuredClone(message));return message.type==='LIGHTENER_START'?{ok:true,enabled,blockMedia}:{ok:true,blocked:message.enabled};}});
+ const controller=api.create({sessionId:'scan',now:()=>time,viewportHeight:()=>600,send:async message=>{messages.push(structuredClone(message));return message.type==='LIGHTENER_START'?{ok:true,enabled,blockMedia,safetyOff}:{ok:true,blocked:message.enabled};}});
  async function scroll(delta=10){controller.beforeScroll(100);time+=1000;await controller.afterScroll(100+delta);}
  async function baseline(){for(let i=0;i<3;i++)await scroll(10);}
  function cards(n=80){const cards=[],records=[];for(let i=0;i<n;i++){const card=new Element('ARTICLE'),img=new Element('IMG',{src:'https://cdn.example/'+i+'.jpg',srcset:'https://cdn.example/'+i+'-large.jpg 2x'});card.textContent='Library ID: '+id(i);card.imgs.push(img);cards.push(card);records.push({id:id(i),mediaUrl:img.getAttribute('src')});controller.track(card,id(i));}return {cards,records};}
@@ -34,11 +34,11 @@ test('video is paused and unloaded only after save; sources are restored for a n
 test('one media/layout failure increments errors, skips the card and allows later cards',async()=>{
  const h=harness();await h.controller.start();await h.baseline();const {cards,records}=h.cards();cards[0].fail=true;await h.controller.committed(records);assert.equal(h.controller.snapshot().errors,1);assert(cards[0].imgs[0].getAttribute('src'));assert.equal(cards[1].imgs[0].getAttribute('src'),null);
 });
-test('safety disables further lightening after three low-growth rounds without bulk media reload',async()=>{
- const h=harness();await h.controller.start();await h.baseline();const {cards,records}=h.cards();await h.controller.committed(records);assert(h.controller.snapshot().lightened>0);await h.scroll(1);await h.scroll(1);assert(h.controller.snapshot().enabled);await h.scroll(1);assert.equal(h.controller.snapshot().enabled,false);assert.equal(h.controller.snapshot().warning,'Hafifletme kapatıldı: yükleme düştü');assert.equal(cards[0].imgs[0].getAttribute('src'),null);h.controller.restoreAll();assert(cards[0].imgs[0].getAttribute('src'));
+test('low-growth rounds only warn and never disable lightening',async()=>{
+ const h=harness();await h.controller.start();await h.baseline();const {cards,records}=h.cards();await h.controller.committed(records);assert(h.controller.snapshot().lightened>0);await h.scroll(1);await h.scroll(1);assert(h.controller.snapshot().enabled);await h.scroll(1);assert.equal(h.controller.snapshot().enabled,true);assert.match(h.controller.snapshot().warning,/Hız düştü:/);assert.equal(cards[0].imgs[0].getAttribute('src'),null);h.controller.restoreAll();assert(cards[0].imgs[0].getAttribute('src'));
 });
-test('experimental blocking waits for three baseline rounds and is removed by safety and stop',async()=>{
- const h=harness({enabled:false,blockMedia:true});await h.controller.start();await h.scroll();await h.scroll();assert(!h.messages.some(m=>m.type==='LIGHTENER_BLOCK'));await h.scroll();assert.equal(h.controller.snapshot().blocked,true);await h.scroll(0);await h.scroll(0);await h.scroll(0);assert.equal(h.controller.snapshot().blocked,false);assert(h.messages.some(m=>m.type==='LIGHTENER_BLOCK'&&m.enabled===false));await h.controller.finish();assert(h.messages.some(m=>m.type==='LIGHTENER_STOP'));
+test('experimental blocking waits for three baseline rounds and is unaffected by slow growth and removed by stop',async()=>{
+ const h=harness({enabled:false,blockMedia:true});await h.controller.start();await h.scroll();await h.scroll();assert(!h.messages.some(m=>m.type==='LIGHTENER_BLOCK'));await h.scroll();assert.equal(h.controller.snapshot().blocked,true);await h.scroll(0);await h.scroll(0);await h.scroll(0);assert.equal(h.controller.snapshot().blocked,true);assert(!h.messages.some(m=>m.type==='LIGHTENER_BLOCK'&&m.enabled===false));await h.controller.finish();assert(h.messages.some(m=>m.type==='LIGHTENER_STOP'));
 });
 test('both disabled preserve the legacy path; last-50 speed and every-200 log still report',async()=>{
  const h=harness({enabled:false});assert.deepEqual(await h.controller.start(),{legacy:true});await h.baseline();const {cards,records}=h.cards(200);for(let i=0;i<records.length;i+=25){h.advance(1000);await h.controller.committed(records.slice(i,i+25));}assert(cards.every(c=>c.imgs[0].getAttribute('src')));assert.equal(h.controller.snapshot().lightened,0);assert(h.messages.some(m=>m.type==='LIGHTENER_REPORT'&&m.log&&m.metrics.total===200&&m.metrics.speed>0));
@@ -68,7 +68,7 @@ test('safety reference follows the three rounds immediately before the first act
  for(let i=0;i<3;i++)await h.scroll(100);
  const more=h.cards(80);await h.controller.committed(more.records);assert(h.controller.snapshot().lightened>0);
  for(let i=0;i<3;i++)await h.scroll(20);
- assert.equal(h.controller.snapshot().enabled,false);assert.equal(h.controller.snapshot().warning,'Hafifletme kapatıldı: yükleme düştü');
+ assert.equal(h.controller.snapshot().enabled,true);assert.match(h.controller.snapshot().warning,/Hız düştü:/);
 });
 test('batch geometry is read before media/style writes to avoid repeated layout recalculation',async()=>{
  const h=harness();await h.controller.start();await h.baseline();const {cards,records}=h.cards();const events=[];
@@ -79,4 +79,23 @@ test('recycled elements restore geometry without overwriting the new ad media UR
  const h=harness();await h.controller.start();await h.baseline();const {cards,records}=h.cards();await h.controller.committed(records);
  const card=cards[0];assert.equal(card.style.height,'640px');card.textContent='Library\u200bID: 9999999999999999';card.imgs[0].setAttribute('src','https://cdn.example/new-ad.jpg');h.controller.prepare(card);
  assert.equal(card.style.height,'');assert.equal(card.imgs[0].getAttribute('src'),'https://cdn.example/new-ad.jpg');h.controller.restoreAll();assert.equal(card.imgs[0].getAttribute('src'),'https://cdn.example/new-ad.jpg');
+});
+
+test('read failures disable temporarily, retry after 150 saved cards, third closure is permanent',async()=>{
+ const h=harness();await h.controller.start();await h.baseline();const {records}=h.cards(500);
+ for(let round=0;round<3;round++){
+  for(let j=0;j<10;j++)h.controller.readResult('bad-'+round+'-'+j,false);
+  await h.scroll();assert.equal(h.controller.snapshot().enabled,false);
+  if(round<2){await h.controller.committed(records.slice(round*150,round*150+150));assert.equal(h.controller.snapshot().enabled,true);}
+ }
+ assert.equal(h.controller.snapshot().permanent,true);assert.equal(h.controller.snapshot().closures,3);
+});
+test('a read error in a full 100-card window triggers data guard',async()=>{
+ const h=harness();await h.controller.start();for(let i=0;i<100;i++)h.controller.readResult('read'+i,i!==20);await h.scroll();assert.equal(h.controller.snapshot().enabled,false);assert.match(h.controller.snapshot().warning,/100 kart/);
+});
+test('test override emits warnings without automatically disabling',async()=>{
+ const h=harness({safetyOff:true});await h.controller.start();for(let i=0;i<10;i++)h.controller.readResult('bad'+i,false);await h.scroll();assert.equal(h.controller.snapshot().enabled,true);assert.match(h.controller.snapshot().warning,/Emniyet kapalı/);
+});
+test('missing-media guard compares saved on and off cohorts',async()=>{
+ const h=harness();await h.controller.start();await h.baseline();const {records}=h.cards(200);await h.controller.committed(records.slice(0,80));await h.controller.committed(records.slice(80,140).map(a=>({...a,mediaUrl:''})));assert.equal(h.controller.snapshot().enabled,false);assert.match(h.controller.snapshot().warning,/Medya URL/);
 });

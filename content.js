@@ -262,8 +262,8 @@
         if(current.ads.size>=current.settings.maxAds)break;
         let ad;
         try { ad=extract(id,record); if(!ad || ad.id!==id)throw new Error('Reklam ID okunamadı.'); }
-        catch { queued.delete(id); discovery.extractionFailures=(discovery.extractionFailures||0)+1; continue; }
-        current.ids.add(id);current.ads.set(id,ad);current.pending.push(ad);index.mark(record.element,id);
+        catch { current.lightener?.readResult(id,false);queued.delete(id); discovery.extractionFailures=(discovery.extractionFailures||0)+1; continue; }
+        current.lightener?.readResult(id,true);current.ids.add(id);current.ads.set(id,ad);current.pending.push(ad);index.mark(record.element,id);
         if(/birden fazla versiyonu var|multiple versions|several versions/i.test(record.element.textContent||''))current.versionEncounters++;
         current.lightener?.track(record.element,id);if(current.useLegacy)lighten(current,record.element);index.drain().delete(id);
         if((current.ads.size-current.initialCount)%50===0){const elapsed=Math.max(.001,(performance.now()-current.speedAt)/1000);current.speed=3000/elapsed;current.baselineSpeed??=current.speed;current.slow=current.speed<current.baselineSpeed*.3;current.speedAt=performance.now();}
